@@ -5,17 +5,18 @@
    talk to each other through the Store (state) and a handful of explicit calls:
 
      01  Utilities
-     02  Catalog & Store ........ options, persistence, share links
-     03  Art: environments ...... seven illustrated SVG rooms
-     04  Art: cast .............. characters, drinks, activities, furniture
-     05  Scene .................. composes the two SVG layers
-     06  FX ..................... canvas fire, embers, smoke, heat distortion
-     07  Director ............... camera, parallax, lighting, quality governor
-     08  Sound .................. synthesised ambience (Web Audio)
-     09  Capture ................ PNG screenshot & share link
-     10  UI ..................... studio panel, dock, speech bubble, toasts
-     11  Easter eggs
-     12  Boot
+     02  Catalog & Store ........ options, custom text, persistence, share links
+     03  Lettering .............. text slots: fitting, wrapping, redrawing in place
+     04  Art: environments ...... seven illustrated SVG rooms
+     05  Art: cast .............. characters, drinks, activities, furniture
+     06  Scene .................. composes the two SVG layers
+     07  FX ..................... canvas fire, embers, smoke, heat distortion
+     08  Director ............... camera, parallax, lighting, quality governor
+     09  Sound .................. synthesised ambience (Web Audio)
+     10  Capture ................ PNG screenshot & share link
+     11  UI ..................... studio panel, text editor, dock, speech bubble, toasts
+     12  Easter eggs
+     13  Boot
    ========================================================================== */
 
 (() => {
@@ -117,13 +118,58 @@
   const levelOf = (config) => CATALOG.chaos.findIndex((item) => item.id === config.chaos) + 1;
 
   /**
-   * Single source of truth. `config` is what the scene shows; `saved` says whether the
-   * visitor has made it their own (which is what gets restored on the next visit).
+   * Every piece of lettering in the scene is a named slot the visitor can rewrite.
+   * `base` is the original wording (a function where it is one of the random easter eggs),
+   * `max` the longest custom text accepted, `hint` an optional note shown under the field.
+   */
+  const TEXT_SLOTS = {
+    say: { group: 'Character', label: 'Speech bubble', max: 90, base: 'This is fine.' },
+
+    mug: { group: 'On the table', label: 'Mug', max: 6, base: () => Eggs.mug },
+    book: { group: 'On the table', label: 'Book title', max: 32, base: () => Eggs.book },
+    mail1: { group: 'On the table', label: 'Notification 1', max: 12, base: 'URGENT' },
+    mail2: { group: 'On the table', label: 'Notification 2', max: 12, base: 'RE: RE: RE:' },
+    mail3: { group: 'On the table', label: 'Notification 3', max: 12, base: 'ASAP' },
+    game1: { group: 'On the table', label: 'Game screen, top line', max: 12, base: 'HI 999999' },
+    game2: { group: 'On the table', label: 'Game screen, second line', max: 12, base: 'LEVEL: FINE' },
+
+    exit: { group: 'In the room', label: 'Exit sign', max: 9, base: 'EXIT' },
+    board: { group: 'In the room', label: 'Whiteboard title', max: 16, base: 'Q4 GOALS' },
+    notes: { group: 'In the room', label: 'Whiteboard notes', max: 48, base: 'synergy, pivot, don’t panic', hint: 'Up to three, separated by commas.' },
+    bsod: { group: 'In the room', label: 'Crashed monitor', max: 6, base: ':(' },
+    tv: { group: 'In the room', label: 'TV headline', max: 18, base: 'BREAKING NEWS' },
+    ticker: { group: 'In the room', label: 'TV ticker', max: 160, base: 'LOCAL RESIDENT: “IT’S FINE” · EXPERTS: “IS IT, THOUGH?” · WEATHER: WARM, WITH A CHANCE OF EVERYTHING' },
+    live: { group: 'In the room', label: 'TV badge', max: 5, base: 'LIVE' },
+    shop: { group: 'In the room', label: 'Shop sign', max: 18, base: 'CAFÉ CALM' },
+    door: { group: 'In the room', label: 'Door sign', max: 7, base: 'OPEN' },
+    hours: { group: 'In the room', label: 'Door lettering', max: 14, base: 'till late' },
+    menu: { group: 'In the room', label: 'Menu board', max: 40, base: 'TODAY hot drinks, hotter seats' },
+    slide: { group: 'In the room', label: 'Slide title', max: 20, base: 'Q3 PERFORMANCE' },
+    outlook: { group: 'In the room', label: 'Slide caption', max: 10, base: 'Outlook:' },
+    verdict: { group: 'In the room', label: 'Slide verdict', max: 8, base: 'FINE' },
+    brass: { group: 'In the room', label: 'Wall lettering', max: 16, base: 'FINE & CO.' },
+    hull: { group: 'In the room', label: 'Console, line 1', max: 12, base: 'HULL: FINE' },
+    oxygen: { group: 'In the room', label: 'Console, line 2', max: 12, base: 'O2: 12%' },
+    holo: { group: 'In the room', label: 'Hologram', max: 6, base: 'FINE' },
+    neon: { group: 'In the room', label: 'Neon sign', max: 14, base: 'it’s fine' },
+    poster: { group: 'In the room', label: 'Poster', max: 6, base: '2099' },
+
+    sticky: { group: 'Hidden extras', label: 'Sticky note', max: 30, base: 'TO DO: panic (later)' },
+    chirp: { group: 'Hidden extras', label: 'Smoke detector', max: 8, base: 'chirp!' },
+    tank: { group: 'Hidden extras', label: 'Extinguisher label', max: 6, base: 'EMPTY' },
+  };
+
+  /**
+   * Single source of truth. `config` is what the scene shows, `texts` any lettering the
+   * visitor rewrote; `saved` says whether they have made it their own (which is what gets
+   * restored on the next visit).
    */
   const Store = (() => {
     const STORAGE_KEY = 'this-is-fine:v1';
+    const TEXT_PARAM = 't.'; // custom lettering travels in share links as t.<slot>=…
     const listeners = new Set();
-    const state = { config: { ...DEFAULTS }, saved: false, shared: false, sound: false };
+    const textListeners = new Set();
+    const state = { config: { ...DEFAULTS }, texts: {}, saved: false, shared: false, sound: false };
 
     const sanitize = (raw) => {
       const clean = {};
@@ -135,24 +181,56 @@
       return clean;
     };
 
-    /** ?character=dog&drink=coffee&activity=laptop&environment=office&chaos=apocalyptic */
+    /**
+     * Custom lettering is untrusted (it arrives through share links): plain text, one line, bounded.
+     * Control characters and stray surrogates go; the limit counts whole characters, so an emoji is never cut in half.
+     */
+    const cleanText = (id, value) => Array.from(String(value)
+      .replace(/[\u0000-\u001f\u007f\u2028\u2029\ud800-\udfff]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim())
+      .slice(0, TEXT_SLOTS[id].max)
+      .join('')
+      .trim();
+
+    const sanitizeTexts = (raw) => {
+      const clean = {};
+      if (raw && typeof raw === 'object') {
+        for (const id of Object.keys(TEXT_SLOTS)) {
+          const value = typeof raw[id] === 'string' ? cleanText(id, raw[id]) : '';
+          if (value) clean[id] = value;
+        }
+      }
+      return clean;
+    };
+
+    /** ?character=dog&drink=coffee&activity=laptop&environment=office&chaos=apocalyptic&t.say=Hello */
     function fromQuery(search = window.location.search) {
       const params = new URLSearchParams(search);
       const raw = {};
+      const rawTexts = {};
       for (const key of KEYS) {
         const value = params.get(key);
         if (value) raw[key] = value.toLowerCase();
       }
-      const clean = sanitize(raw);
-      return Object.keys(clean).length ? clean : null;
+      for (const [key, value] of params) {
+        if (key.startsWith(TEXT_PARAM)) rawTexts[key.slice(TEXT_PARAM.length)] = value;
+      }
+      const config = sanitize(raw);
+      const texts = sanitizeTexts(rawTexts);
+      return Object.keys(config).length || Object.keys(texts).length ? { config, texts } : null;
     }
 
-    const toQuery = (config = state.config) => new URLSearchParams(KEYS.map((key) => [key, config[key]])).toString();
+    const toQuery = () => new URLSearchParams([
+      ...KEYS.map((key) => [key, state.config[key]]),
+      ...Object.entries(state.texts).map(([id, value]) => [TEXT_PARAM + id, value]),
+    ]).toString();
 
     function persist() {
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
           config: state.saved ? state.config : null,
+          texts: state.saved ? state.texts : {},
           sound: state.sound,
         }));
       } catch {
@@ -172,56 +250,73 @@
         const config = sanitize(stored.config);
         if (Object.keys(config).length) {
           state.config = { ...DEFAULTS, ...config };
+          state.texts = sanitizeTexts(stored.texts);
           state.saved = true;
         }
       }
       // A shared link always wins over what was saved, but does not overwrite it until edited.
       const shared = fromQuery();
       if (shared) {
-        state.config = { ...DEFAULTS, ...shared };
+        state.config = { ...DEFAULTS, ...shared.config };
+        state.texts = shared.texts;
         state.shared = true;
       }
       return state;
     }
 
     const emit = (previous, changed) => listeners.forEach((listener) => listener(state.config, previous, changed));
+    const emitText = (id) => textListeners.forEach((listener) => listener(id));
 
-    /** Apply a partial config. Any change makes the creation "theirs": saved and restored next time. */
+    /** Any edit makes the creation "theirs": saved, restored next time, no longer a shared link. */
+    function adopt() {
+      state.saved = true;
+      if (state.shared) {
+        state.shared = false;
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+      persist();
+    }
+
+    /** Apply a partial config. */
     function set(patch) {
       const next = { ...state.config, ...sanitize(patch) };
       const changed = KEYS.filter((key) => next[key] !== state.config[key]);
       if (!changed.length) return false;
       const previous = state.config;
       state.config = next;
-      state.saved = true;
-      if (state.shared) {
-        state.shared = false;
-        window.history.replaceState(null, '', window.location.pathname);
-      }
-      persist();
+      adopt();
       emit(previous, changed);
       return true;
+    }
+
+    /** Rewrite one piece of lettering; an empty value restores the original wording. */
+    function setText(id, value) {
+      const next = cleanText(id, value);
+      if (next === (state.texts[id] || '')) return;
+      if (next) state.texts[id] = next;
+      else delete state.texts[id];
+      adopt();
+      emitText(id);
+    }
+
+    /** Restore the original wording everywhere. */
+    function clearTexts() {
+      state.texts = {};
+      adopt();
+      emitText(null);
     }
 
     /** Back to the untouched original. */
     function reset() {
       const previous = state.config;
       state.config = { ...DEFAULTS };
+      state.texts = {};
       state.saved = false;
       state.shared = false;
       window.history.replaceState(null, '', window.location.pathname);
       persist();
+      emitText(null);
       emit(previous, KEYS.filter((key) => previous[key] !== DEFAULTS[key]));
-    }
-
-    /** Adopt whatever is on screen as the visitor's creation, even if they changed nothing. */
-    function keep() {
-      state.saved = true;
-      if (state.shared) {
-        state.shared = false;
-        window.history.replaceState(null, '', window.location.pathname);
-      }
-      persist();
     }
 
     function setSound(on) {
@@ -229,22 +324,166 @@
       persist();
     }
 
+    /** The original wording of a slot. */
+    const baseText = (id) => {
+      const { base } = TEXT_SLOTS[id];
+      return typeof base === 'function' ? base() : base;
+    };
+
     return {
       load,
       set,
-      keep,
+      setText,
+      clearTexts,
+      /** Adopt whatever is on screen as the visitor's creation, even if they changed nothing. */
+      keep: adopt,
       reset,
       setSound,
       toQuery,
+      baseText,
+      /** What a slot says right now: the visitor's wording, or the original. */
+      text: (id) => state.texts[id] || baseText(id),
+      /** The visitor's own wording for a slot ('' if they have not touched it). */
+      customText: (id) => state.texts[id] || '',
       subscribe: (listener) => listeners.add(listener),
+      /** Called with the slot id whose wording changed, or null when all of it did. */
+      onText: (listener) => textListeners.add(listener),
       get config() { return state.config; },
       get level() { return levelOf(state.config); },
+      get hasTexts() { return Object.keys(state.texts).length > 0; },
       get hasCreation() { return state.saved || state.shared; },
     };
   })();
 
   /* ------------------------------------------------------------------------
-     03 — Art: environments
+     03 — Lettering
+     The art never hard-codes its wording. It asks for a text slot through
+     `slot()`, which also remembers how that slot is drawn — so when the
+     visitor rewrites it, only that one piece of lettering is redrawn.
+     ------------------------------------------------------------------------ */
+
+  // System fonts only: SVG that is rasterised for the PNG export cannot load web fonts.
+  const FONTS = {
+    sans: 'Arial, Helvetica, sans-serif',
+    serif: "Georgia, 'Times New Roman', serif",
+    mono: "'Courier New', Courier, monospace",
+    comic: "'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive",
+    black: "'Arial Black', Arial, sans-serif",
+    script: "'Brush Script MT', 'Segoe Script', 'Snell Roundhand', cursive",
+  };
+
+  const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  /** Visitor text goes into SVG markup: escape it, always. */
+  const esc = (text) => String(text).replace(/[&<>"']/g, (char) => ESCAPES[char]);
+
+  const measurer = document.createElement('canvas').getContext('2d');
+
+  const textWidth = (text, { size, font = 'sans', weight = 400, italic = false, spacing = 0 }) => {
+    measurer.font = `${italic ? 'italic ' : ''}${weight} ${size}px ${FONTS[font]}`;
+    return measurer.measureText(text).width + spacing * text.length;
+  };
+
+  /** The largest size, up to the designed one, at which `text` fits in `width`. */
+  const fittedSize = (text, options) =>
+    options.size * clamp(options.width / Math.max(textWidth(text, options), 1), 0.4, 1);
+
+  /**
+   * One line of scene lettering that always fits its sign: long wording gets a smaller font
+   * (kept centred on the original line) and, as a last resort, is squeezed to the exact width.
+   * Pass `fitted` to set several lines in one shared size; the caller then places each baseline.
+   */
+  function fitText(text, options) {
+    const { x, y, size, width, font = 'sans', weight = 400, italic = false, spacing = 0, anchor = 'start', fill, extra = '' } = options;
+    const solo = options.fitted === undefined;
+    const fitted = solo ? fittedSize(text, options) : options.fitted;
+    const scale = fitted / size;
+    const squeezed = textWidth(text, { ...options, size: fitted, spacing: spacing * scale }) > width + 0.5;
+    return `<text x="${x}" y="${n(solo ? y - (size - fitted) * 0.35 : y, 2)}" font-family="${FONTS[font]}" font-weight="${weight}" font-size="${n(fitted, 2)}"` +
+      `${italic ? ' font-style="italic"' : ''}${spacing ? ` letter-spacing="${n(spacing * scale, 2)}"` : ''}` +
+      `${anchor === 'start' ? '' : ` text-anchor="${anchor}"`}${squeezed ? ` textLength="${width}" lengthAdjust="spacingAndGlyphs"` : ''}` +
+      `${fill ? ` fill="${fill}"` : ''}${extra ? ` ${extra}` : ''}>${esc(text)}</text>`;
+  }
+
+  /**
+   * Several lines set in one shared size. `baseline(i, scale)` places each line, where `scale`
+   * says how far the lettering had to shrink (1 = as designed); `each(line, i)` may add
+   * attributes to a single line.
+   */
+  function fitLines(lines, { baseline, each, ...options }) {
+    const fitted = Math.min(options.size, ...lines.map((line) => fittedSize(line, options)));
+    return lines.map((line, i) => fitText(line, {
+      ...options,
+      fitted,
+      y: baseline(i, fitted / options.size),
+      extra: each ? each(line, i) : options.extra,
+    })).join('');
+  }
+
+  /** Baselines for `count` lines of the given size and leading, centred as a block on `cy`. */
+  const centred = (cy, size, leading, count) => (i, scale) =>
+    cy + (size * 0.35 + (i - (count - 1) / 2) * leading) * scale;
+
+  /** Greedy word wrap into at most `maxLines` lines; they only grow past `perLine` characters when they must. */
+  function wrapWords(text, perLine, maxLines) {
+    const words = text.split(' ').filter(Boolean);
+    for (let limit = perLine; ; limit++) {
+      const lines = [];
+      for (const word of words) {
+        const last = lines.length - 1;
+        if (last >= 0 && lines[last].length + 1 + word.length <= limit) lines[last] += ` ${word}`;
+        else lines.push(word);
+      }
+      if (lines.length <= maxLines) return lines;
+    }
+  }
+
+  /** "a, b, c, d" → at most `max` items; whatever is left over stays in the last one. */
+  function splitList(text, max) {
+    const parts = text.split(',');
+    return [...parts.slice(0, max - 1), parts.slice(max - 1).join(',')]
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  const Lettering = (() => {
+    const renderers = new Map();
+
+    /** Slot elements in the scene, ignoring a room that is fading out. */
+    const nodes = (id) => $$(id ? `#scene [data-slot="${id}"]` : '#scene [data-slot]')
+      .filter((node) => !node.closest('.is-leaving'));
+
+    /** Draw a text slot. `render(wording)` returns its SVG; the wrapper lets it be redrawn in place. */
+    function slot(id, render) {
+      renderers.set(id, render);
+      return `<g data-slot="${id}">${render(Store.text(id))}</g>`;
+    }
+
+    /** Redraw one slot (or, with no id, every slot) after its wording changed. */
+    function refresh(id) {
+      for (const node of nodes(id)) node.innerHTML = renderers.get(node.dataset.slot)(Store.text(node.dataset.slot));
+    }
+
+    /** The slots that are part of the scene right now, in catalogue order. */
+    function present() {
+      const live = new Set(nodes().map((node) => node.dataset.slot));
+      return Object.keys(TEXT_SLOTS).filter((id) => id === 'say' || live.has(id));
+    }
+
+    /** Light up the lettering whose field is being edited, so it is easy to find. Returns it (null: none). */
+    function highlight(id) {
+      $$('#scene .is-editing').forEach((node) => node.classList.remove('is-editing'));
+      const lit = id ? nodes(id) : [];
+      lit.forEach((node) => node.classList.add('is-editing'));
+      return lit[0] || null;
+    }
+
+    return { slot, refresh, present, highlight };
+  })();
+
+  const { slot } = Lettering;
+
+  /* ------------------------------------------------------------------------
+     04 — Art: environments
      Every room is drawn in a 1600 × 1400 "world". The wall meets the floor at
      y = 900 and the cast sits around the centre, so one illustration crops
      gracefully to anything from an ultrawide monitor to a tall phone.
@@ -265,12 +504,12 @@
    */
   function sceneFlames(x, y, width, height, count, seed, cls = '', p = 'e') {
     const r = seeded(seed);
-    const slot = width / count;
+    const step = width / count;
     let out = '';
     for (let i = 0; i < count; i++) {
-      const fx = x + slot * (i + 0.5) + (r() - 0.5) * slot * 0.4;
+      const fx = x + step * (i + 0.5) + (r() - 0.5) * step * 0.4;
       const fh = height * (0.55 + r() * 0.45);
-      const fw = slot * (1.15 + r() * 0.5);
+      const fw = step * (1.15 + r() * 0.5);
       out += `<g transform="translate(${n(fx)} ${y})"><g class="sflame" style="--t:${n(0.6 + r() * 0.7, 2)}s;--d:${n(-r() * 2, 2)}s">` +
         `<path d="${flamePath(fw, fh)}" fill="url(#${p}-fo)"/><path d="${flamePath(fw * 0.5, fh * 0.55)}" fill="url(#${p}-fi)"/></g></g>`;
     }
@@ -301,8 +540,10 @@
     const r = seeded(seed);
     let out = '';
     for (let i = 0; i < count; i++) {
-      const twinkle = r() < 0.25 ? ` class="twinkle" style="--t:${n(1.5 + r() * 3)}s;--d:${n(-r() * 4)}s"` : '';
-      out += `<circle cx="${n(x + r() * w)}" cy="${n(y + r() * h)}" r="${n(0.8 + r() * 1.6)}" opacity="${n(0.35 + r() * 0.6, 2)}"${twinkle}/>`;
+      const timing = r() < 0.25 ? `--t:${n(1.5 + r() * 3)}s;--d:${n(-r() * 4)}s` : '';
+      const at = `cx="${n(x + r() * w)}" cy="${n(y + r() * h)}" r="${n(0.8 + r() * 1.6)}"`;
+      const glow = n(0.35 + r() * 0.6, 2);
+      out += timing ? `<circle ${at} class="twinkle" style="${timing};--o:${glow}"/>` : `<circle ${at} opacity="${glow}"/>`;
     }
     return `<g fill="#fff">${out}</g>`;
   }
@@ -330,7 +571,7 @@
     <linearGradient id="e-fo" x2="0" y2="1"><stop offset="0" stop-color="#e2330f"/><stop offset=".5" stop-color="#ff7a1a"/><stop offset="1" stop-color="#ffc24a"/></linearGradient>
     <linearGradient id="e-fi" x2="0" y2="1"><stop offset="0" stop-color="#ffc23d"/><stop offset="1" stop-color="#fff3b0"/></linearGradient>
     <linearGradient id="e-glow" x2="0" y2="1"><stop offset="0" stop-color="#ff8a1f" stop-opacity="0"/><stop offset="1" stop-color="#ff8a1f" stop-opacity=".66"/></linearGradient>
-    <linearGradient id="e-soot" x2="0" y2="1"><stop offset="0" stop-color="#120705" stop-opacity=".94"/><stop offset="1" stop-color="#120705" stop-opacity="0"/></linearGradient>
+    <linearGradient id="e-soot" x2="0" y2="1"><stop offset="0" stop-color="#120705" stop-opacity=".86"/><stop offset="1" stop-color="#120705" stop-opacity="0"/></linearGradient>
     <radialGradient id="e-scorch"><stop offset="0" stop-color="#120604" stop-opacity=".85"/><stop offset=".6" stop-color="#120604" stop-opacity=".35"/><stop offset="1" stop-color="#120604" stop-opacity="0"/></radialGradient>
     <radialGradient id="e-halo"><stop offset="0" stop-color="#fff2c4" stop-opacity=".95"/><stop offset="1" stop-color="#ffb347" stop-opacity="0"/></radialGradient>`;
 
@@ -341,15 +582,11 @@
     <g class="lv-3"><ellipse cx="60" cy="640" rx="220" ry="310" fill="url(#e-scorch)"/><ellipse cx="1545" cy="620" rx="230" ry="330" fill="url(#e-scorch)"/><ellipse cx="430" cy="830" rx="170" ry="110" fill="url(#e-scorch)"/><ellipse cx="1190" cy="836" rx="190" ry="104" fill="url(#e-scorch)"/></g>
     ${cracks ? '<g class="lv-4" fill="none" stroke="#1a0a06" stroke-width="5" stroke-linejoin="round" opacity=".7"><path d="M690 178l14 46-20 34 26 50-10 44"/><path d="M1052 178l-10 38 18 30-14 40"/><path d="M330 178l8 30-14 28"/></g>' : ''}`;
 
-  const FONT_SANS = 'font-family="Arial, Helvetica, sans-serif"';
-  const FONT_SERIF = `font-family="Georgia, 'Times New Roman', serif"`;
-  const FONT_MONO = `font-family="'Courier New', Courier, monospace"`;
-
   const ENVIRONMENTS = {
     /* — The original: mustard walls, a window, a door, a clock that gives up — */
     classic: {
       chair: 'wood', table: 'round', reflect: 0.22, palette: 'ember',
-      eggs: { wall: [1060, 296], floor: [1236, 1012] },
+      eggs: { wall: [1036, 296], floor: [1236, 1012] },
       art: () => `
         <defs>
           <linearGradient id="cl-wall" x2="0" y2="1"><stop offset="0" stop-color="#a66824"/><stop offset=".42" stop-color="#e1a543"/><stop offset="1" stop-color="#f6c95f"/></linearGradient>
@@ -398,8 +635,8 @@
         <rect x="1310" y="418" width="200" height="482" fill="#8b4f22"/>
         <rect x="1330" y="440" width="160" height="180" rx="4" fill="#7a431b"/><rect x="1330" y="650" width="160" height="220" rx="4" fill="#7a431b"/>
         <circle cx="1338" cy="640" r="11" fill="#e8b84a"/>
-        <rect x="1310" y="884" width="200" height="16" fill="#ffb347" class="lv-2 flick"/>
-        <path d="M1303 900V411h214v489" fill="none" stroke="#ffc266" stroke-width="5" class="lv-3 flick"/>
+        <g class="lv-2"><rect x="1310" y="884" width="200" height="16" fill="#ffb347" class="flick"/></g>
+        <g class="lv-3"><path d="M1303 900V411h214v489" fill="none" stroke="#ffc266" stroke-width="5" class="flick"/></g>
 
         <g class="lean" style="--dir:1">
           <rect x="1211" y="566" width="8" height="336" fill="#4a2a12"/><ellipse cx="1215" cy="900" rx="44" ry="10" fill="#4a2a12"/>
@@ -447,17 +684,17 @@
         <g class="crooked" style="--dir:1.4">
           <path d="M1012 172v132M1078 172v132" stroke="#4d5863" stroke-width="3"/>
           <rect x="996" y="302" width="98" height="40" rx="5" fill="#1d7a3e"/>
-          <text x="1045" y="331" text-anchor="middle" ${FONT_SANS} font-weight="700" font-size="24" letter-spacing="2" fill="#eafff0">EXIT</text>
-          <rect x="996" y="302" width="98" height="40" rx="5" fill="#7dffb0" opacity=".25" class="flick"/>
+          ${slot('exit', (text) => fitText(text, { x: 1045, y: 331, size: 24, weight: 700, spacing: 2, width: 84, anchor: 'middle', fill: '#eafff0' }))}
+          <rect x="996" y="302" width="98" height="40" rx="5" fill="#7dffb0" class="flick" style="--o:.25"/>
         </g>
 
         <g class="crooked" style="--dir:-.35">
           <rect x="1140" y="344" width="360" height="266" rx="8" fill="#8b959e"/><rect x="1152" y="356" width="336" height="242" fill="#fbfdff"/>
-          <text x="1172" y="394" ${FONT_SANS} font-weight="700" font-size="24" fill="#26323d">Q4 GOALS</text>
+          ${slot('board', (text) => fitText(text, { x: 1172, y: 394, size: 24, weight: 700, width: 296, fill: '#26323d' }))}
           <path d="M1172 404h112" stroke="#e2330f" stroke-width="4"/>
           <path d="M1176 440v120h184" fill="none" stroke="#26323d" stroke-width="4" stroke-linecap="round"/>
           <path d="M1186 540l34-22 30 8 34-46 28 12 32 66" fill="none" stroke="#e2330f" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
-          <text ${FONT_SANS} font-size="15" fill="#26323d"><tspan x="1384" y="446">• synergy</tspan><tspan x="1384" y="472">• pivot</tspan><tspan x="1384" y="498">• don’t panic</tspan></text>
+          ${slot('notes', (text) => fitLines(splitList(text, 3).map((item) => `• ${item}`), { x: 1384, size: 15, width: 98, fill: '#26323d', baseline: (i) => 446 + i * 26 }))}
           <rect x="1392" y="518" width="56" height="52" fill="#ffe36b" transform="rotate(-6 1420 544)"/>
           <rect x="1152" y="598" width="336" height="10" fill="#6f7982"/>
         </g>
@@ -482,7 +719,7 @@
 
         <rect x="1166" y="786" width="370" height="16" rx="4" fill="#e7ecef"/><rect x="1186" y="802" width="14" height="98" fill="#aab4bc"/><rect x="1500" y="802" width="14" height="98" fill="#aab4bc"/>
         <rect x="1280" y="662" width="170" height="108" rx="8" fill="#20262c"/><rect x="1290" y="672" width="150" height="88" fill="#2757d6"/>
-        <text x="1304" y="716" ${FONT_SANS} font-weight="700" font-size="34" fill="#fff">:(</text>
+        ${slot('bsod', (text) => fitText(text, { x: 1304, y: 716, size: 34, weight: 700, width: 124, fill: '#fff' }))}
         <path d="M1304 734h90M1304 746h60" stroke="#fff" stroke-width="4" opacity=".8"/>
         <rect x="1354" y="770" width="22" height="16" fill="#20262c"/>
         <path d="M1208 786l-6-28h40l-6 28z" fill="#c8623a"/>
@@ -547,17 +784,24 @@
         <g fill="#d9b36a"><circle cx="1270" cy="852" r="5"/><circle cx="1298" cy="852" r="5"/><circle cx="1394" cy="852" r="5"/><circle cx="1422" cy="852" r="5"/></g>
         <rect x="1330" y="778" width="30" height="26" fill="#14161b"/>
         <rect x="1190" y="580" width="310" height="200" rx="10" fill="#14161b"/>
-        <g clip-path="url(#lv-tv)" ${FONT_SANS} font-weight="700">
+        <g clip-path="url(#lv-tv)">
           <rect x="1202" y="592" width="286" height="176" fill="#1b3b5e"/>
           <circle cx="1268" cy="660" r="21" fill="#f1c7a3"/><path d="M1232 732c4-32 20-46 36-46s32 14 36 46z" fill="#2c3e66"/>
           <rect x="1330" y="610" width="146" height="90" rx="4" fill="#ff8a2a"/>
           ${sceneFlames(1332, 700, 142, 76, 4, 33)}
-          <rect x="1418" y="616" width="52" height="22" rx="4" fill="#d21f1f"/><text x="1444" y="632" text-anchor="middle" font-size="13" fill="#fff">LIVE</text>
-          <rect x="1202" y="712" width="286" height="30" fill="#d21f1f"/><text x="1212" y="733" font-size="17" fill="#fff">BREAKING NEWS</text>
+          <rect x="1418" y="616" width="52" height="22" rx="4" fill="#d21f1f"/>
+          ${slot('live', (text) => fitText(text, { x: 1444, y: 632, size: 13, weight: 700, width: 44, anchor: 'middle', fill: '#fff' }))}
+          <rect x="1202" y="712" width="286" height="30" fill="#d21f1f"/>
+          ${slot('tv', (text) => fitText(text, { x: 1212, y: 733, size: 17, weight: 700, width: 266, fill: '#fff' }))}
           <rect x="1202" y="742" width="286" height="26" fill="#f4f4f4"/>
-          <text class="marquee" x="1212" y="761" font-size="15" fill="#14161b">LOCAL RESIDENT: “IT’S FINE” · EXPERTS: “IS IT, THOUGH?” · WEATHER: WARM, WITH A CHANCE OF EVERYTHING · LOCAL RESIDENT: “IT’S FINE” · EXPERTS: “IS IT, THOUGH?”</text>
+          ${slot('ticker', (text) => {
+            // Repeated until it fills the screen, then scrolled by exactly one repeat: a seamless loop.
+            const unit = `${text} · `;
+            const width = textWidth(unit, { size: 15, weight: 700 });
+            return `<text class="marquee" style="--w:${n(-width)}px;--t:${n(width / 44)}s" x="1212" y="761" font-family="${FONTS.sans}" font-weight="700" font-size="15" fill="#14161b">${esc(unit.repeat(Math.ceil(286 / width) + 1))}</text>`;
+          })}
         </g>
-        <rect x="1202" y="592" width="286" height="176" fill="#9fd4ff" opacity=".1" class="flick"/>
+        <rect x="1202" y="592" width="286" height="176" fill="#9fd4ff" class="flick" style="--o:.1"/>
 
         <path d="M1112 900l-8-46h52l-8 46z" fill="#c8623a"/>
         <path d="M1130 854c-6-70 0-130 4-190M1130 800c-30-20-44-50-40-80M1132 760c28-16 44-44 44-76M1132 700c-22-18-30-44-26-66" fill="none" stroke="#3c7d49" stroke-width="7" stroke-linecap="round"/>
@@ -611,7 +855,7 @@
         ${stars(41, 70, 0, 0, 1600, 430)}
         <circle cx="1330" cy="170" r="96" fill="url(#e-halo)" opacity=".35"/><circle cx="1330" cy="170" r="48" fill="#fff1cf" opacity=".92"/>
         ${skyline({ seed: 42, x0: -20, x1: 1620, base: 900, min: 400, max: 720, fill: '#24143f', lit: '#ffcf70', chance: 0.14, win: [9, 13], gap: [15, 19] })}
-        ${sceneFlames(560, 420, 240, 170, 3, 44, 'lv-3')}
+        ${sceneFlames(560, 346, 240, 170, 3, 44, 'lv-3')}
         ${skyline({ seed: 43, x0: -20, x1: 1620, base: 900, min: 270, max: 480, fill: '#33204f', lit: '#ffd98a', chance: 0.2, win: [10, 14], gap: [16, 20] })}
 
         <rect x="-10" y="250" width="390" height="650" fill="#3a2146"/><rect x="-10" y="250" width="390" height="16" fill="#2b1736"/>
@@ -621,9 +865,11 @@
         <rect x="1260" y="300" width="350" height="600" fill="#2f1c40"/><rect x="1260" y="300" width="350" height="16" fill="#22122f"/>
         ${block(1296, 350, 3, 4, 47)}
 
-        <rect x="380" y="424" width="880" height="476" fill="#1f4d57"/><rect x="380" y="424" width="880" height="14" fill="#173a42"/>
-        <rect x="420" y="448" width="800" height="62" rx="6" fill="#12313a"/>
-        <text x="820" y="492" text-anchor="middle" ${FONT_SERIF} font-weight="700" font-size="38" letter-spacing="10" fill="#f6e7c1">CAFÉ CALM</text>
+        <rect x="380" y="346" width="880" height="554" fill="#1f4d57"/><rect x="380" y="346" width="880" height="14" fill="#173a42"/>
+        <rect x="420" y="372" width="800" height="62" rx="6" fill="#12313a"/>
+        ${slot('shop', (text) => fitText(text, { x: 820, y: 416, size: 38, font: 'serif', weight: 700, spacing: 10, width: 760, anchor: 'middle', fill: '#f6e7c1' }))}
+        <path d="M380 452h880" stroke="#173a42" stroke-width="5"/>
+        <g fill="#173a42"><rect x="470" y="462" width="16" height="50" rx="3"/><rect x="812" y="462" width="16" height="50" rx="3"/><rect x="1154" y="462" width="16" height="50" rx="3"/></g>
         ${awning}
         <rect x="440" y="622" width="470" height="240" rx="6" fill="#efe6d2"/><rect x="452" y="634" width="446" height="216" fill="url(#st-shop)"/>
         <path d="M540 634v40M800 634v40" stroke="#5b3212" stroke-width="3"/>
@@ -631,15 +877,15 @@
         <path d="M526 674h28l-6 16h-16zM786 674h28l-6 16h-16z" fill="#5b3212"/>
         <rect x="452" y="792" width="446" height="58" fill="#7a3f1a" opacity=".75"/>
         <path d="M590 792v-44h64v44zM600 748v-12h44v12" fill="#4a2410" opacity=".8"/>
-        <text x="675" y="744" text-anchor="middle" ${FONT_SERIF} font-style="italic" font-size="30" fill="#fff8e6" opacity=".92">open late</text>
         <path d="M675 634v216" stroke="#efe6d2" stroke-width="10"/>
         <rect x="960" y="606" width="196" height="294" rx="6" fill="#efe6d2"/><rect x="974" y="620" width="168" height="280" fill="#173a42"/>
         <rect x="990" y="636" width="136" height="150" rx="4" fill="url(#st-shop)" opacity=".85"/>
         <circle cx="1128" cy="806" r="8" fill="#e8b84a"/>
+        ${slot('hours', (text) => fitText(text, { x: 1058, y: 724, size: 21, font: 'serif', italic: true, width: 116, anchor: 'middle', fill: '#5b3212' }))}
         <g class="crooked" style="--dir:1.6">
           <path d="M1040 652l18-18 18 18" fill="none" stroke="#2a120b" stroke-width="2"/>
           <rect x="1018" y="650" width="80" height="40" rx="5" fill="#c8372f"/>
-          <text x="1058" y="678" text-anchor="middle" ${FONT_SANS} font-weight="700" font-size="22" fill="#fff8e6">OPEN</text>
+          ${slot('door', (text) => fitText(text, { x: 1058, y: 678, size: 22, weight: 700, width: 68, anchor: 'middle', fill: '#fff8e6' }))}
         </g>
 
         <rect x="312" y="560" width="12" height="340" fill="#1a1422"/><rect x="290" y="430" width="56" height="140" rx="12" fill="#1a1422"/>
@@ -659,7 +905,7 @@
 
         <path d="M1166 952l24-152h44l24 152z" fill="#2b2b33"/>
         <rect x="1186" y="816" width="52" height="104" rx="3" fill="#1c1c22" stroke="#8a5a2b" stroke-width="5"/>
-        <text ${FONT_SANS} font-size="12" font-weight="700" fill="#fff8e6" text-anchor="middle"><tspan x="1212" y="840">TODAY</tspan><tspan x="1212" y="860">hot</tspan><tspan x="1212" y="876">drinks,</tspan><tspan x="1212" y="892">hotter</tspan><tspan x="1212" y="908">seats</tspan></text>
+        ${slot('menu', (text) => fitLines(wrapWords(text, 7, 5), { x: 1212, size: 12, weight: 700, width: 46, anchor: 'middle', fill: '#fff8e6', baseline: (i) => (i ? 844 + i * 16 : 840) }))}
         <rect x="1284" y="932" width="44" height="80" rx="8" fill="#d2301f"/><path d="M1284 934q22-30 44 0z" fill="#e2482f"/>
         <rect x="1276" y="952" width="60" height="16" rx="6" fill="#b02416"/><rect x="1278" y="1004" width="56" height="12" rx="4" fill="#b02416"/>
         <circle cx="1306" cy="982" r="7" fill="#f6d27a"/>
@@ -671,7 +917,7 @@
     /* — Walnut panels, brass letters and a slide deck in freefall — */
     boardroom: {
       chair: 'office', table: 'board', reflect: 0.3, palette: 'ember',
-      eggs: { wall: [628, 296], floor: [470, 1012] },
+      eggs: { wall: [1040, 296], floor: [470, 1012] },
       art: () => {
         let seams = '';
         for (let x = 160; x < 1600; x += 160) seams += `M${x} 176V872`;
@@ -695,20 +941,18 @@
         ${spots}
 
         <rect x="100" y="320" width="450" height="290" rx="10" fill="#0c0c10"/><rect x="114" y="334" width="422" height="262" fill="#f7f4ee"/>
-        <g ${FONT_SANS}>
-          <text x="136" y="376" font-weight="700" font-size="26" fill="#1c2440">Q3 PERFORMANCE</text>
-          <path d="M136 388h150" stroke="#e2330f" stroke-width="4"/>
-          <g fill="#2c4a8a"><rect x="150" y="420" width="40" height="150"/><rect x="212" y="450" width="40" height="120"/><rect x="274" y="476" width="40" height="94"/><rect x="336" y="512" width="40" height="58"/></g>
-          <rect x="398" y="542" width="40" height="28" fill="#e2330f"/>
-          <path d="M150 570h300" stroke="#1c2440" stroke-width="3"/>
-          <path d="M160 404l230 116" fill="none" stroke="#e2330f" stroke-width="6" stroke-linecap="round"/><path d="M402 526l-28 0 12-22z" fill="#e2330f"/>
-          ${sceneFlames(390, 544, 56, 64, 1, 51)}
-          <text x="452" y="424" font-size="15" fill="#1c2440">Outlook:</text>
-          <text x="452" y="450" font-weight="700" font-size="24" fill="#1d7a3e">FINE</text>
-        </g>
-        <rect x="114" y="334" width="422" height="262" fill="#fff" opacity=".1" class="flick"/>
+        ${slot('slide', (text) => fitText(text, { x: 136, y: 376, size: 26, weight: 700, width: 380, fill: '#1c2440' }))}
+        <path d="M136 388h150" stroke="#e2330f" stroke-width="4"/>
+        <g fill="#2c4a8a"><rect x="150" y="420" width="40" height="150"/><rect x="212" y="450" width="40" height="120"/><rect x="274" y="476" width="40" height="94"/><rect x="336" y="512" width="40" height="58"/></g>
+        <rect x="398" y="542" width="40" height="28" fill="#e2330f"/>
+        <path d="M150 570h300" stroke="#1c2440" stroke-width="3"/>
+        <path d="M160 404l230 116" fill="none" stroke="#e2330f" stroke-width="6" stroke-linecap="round"/><path d="M402 526l-28 0 12-22z" fill="#e2330f"/>
+        ${sceneFlames(390, 544, 56, 64, 1, 51)}
+        ${slot('outlook', (text) => fitText(text, { x: 452, y: 424, size: 15, width: 76, fill: '#1c2440' }))}
+        ${slot('verdict', (text) => fitText(text, { x: 452, y: 450, size: 24, weight: 700, width: 76, fill: '#1d7a3e' }))}
+        <rect x="114" y="334" width="422" height="262" fill="#fff" class="flick" style="--o:.1"/>
 
-        <text x="830" y="332" text-anchor="middle" ${FONT_SERIF} font-weight="700" font-size="34" letter-spacing="8" fill="#d9b36a">FINE &amp; CO.</text>
+        ${slot('brass', (text) => fitText(text, { x: 830, y: 332, size: 34, font: 'serif', weight: 700, spacing: 8, width: 310, anchor: 'middle', fill: '#d9b36a' }))}
         <path d="M700 348h260" stroke="#d9b36a" stroke-width="3" opacity=".7"/>
 
         <rect x="1176" y="286" width="368" height="608" fill="#17100c"/>
@@ -798,14 +1042,12 @@
         </g>
 
         <rect x="776" y="328" width="48" height="14" fill="#3d4d62"/><path d="M780 342a20 24 0 0 0 40 0z" fill="#ff3b30"/>
-        <ellipse cx="800" cy="376" rx="170" ry="120" fill="url(#sp-alarm)" class="lv-2 pulse" style="--t:.55s"/>
+        <g class="lv-2"><ellipse cx="800" cy="376" rx="170" ry="120" fill="url(#sp-alarm)" class="pulse" style="--t:.55s"/></g>
 
         <path d="M70 900V700l40-56h440l40 56v200z" fill="#33445b"/><path d="M110 644h440l40 56H70z" fill="#445a76"/>
         <rect x="100" y="722" width="150" height="96" rx="8" fill="#07101a"/><rect x="270" y="722" width="150" height="96" rx="8" fill="#07101a"/>
-        <g ${FONT_MONO} font-weight="700" font-size="16">
-          <text x="112" y="750" fill="#57f287">HULL: FINE</text>
-          <text x="112" y="776" fill="#ff5a3c" class="blink-led" style="--t:.9s">O2: 12%</text>
-        </g>
+        ${slot('hull', (text) => fitText(text, { x: 112, y: 750, size: 16, font: 'mono', weight: 700, width: 128, fill: '#57f287' }))}
+        ${slot('oxygen', (text) => fitText(text, { x: 112, y: 776, size: 16, font: 'mono', weight: 700, width: 128, fill: '#ff5a3c', extra: 'class="blink-led" style="--t:.9s"' }))}
         <path d="M112 798h126" stroke="#ff5a3c" stroke-width="8" opacity=".25"/><path d="M112 798h22" stroke="#ff5a3c" stroke-width="8"/>
         <path d="M280 770h14l8-26 12 50 10-36 8 12h20l8-30 10 52 8-22h32" fill="none" stroke="#5ff2ff" stroke-width="3" stroke-linejoin="round"/>
         ${buttons}
@@ -818,7 +1060,7 @@
         <rect y="872" width="1600" height="28" fill="url(#sp-hazard)"/>
         <rect y="900" width="1600" height="500" fill="url(#sp-floor)"/>
         ${floorGrid('#5ff2ff', 0.16)}
-        <path d="M0 962h1600" stroke="#5ff2ff" stroke-width="4" opacity=".55" class="pulse" style="--t:1.8s"/>
+        <path d="M0 962h1600" stroke="#5ff2ff" stroke-width="4" class="pulse" style="--t:1.8s;--o:.55"/>
         ${damage({ cracks: false })}`;
       },
     },
@@ -863,7 +1105,7 @@
           ${skyline({ seed: 71, x0: 430, x1: 1520, base: 782, min: 210, max: 450, fill: '#2a1a5e', lit: '#5ff2ff', chance: 0.12, win: [6, 16], gap: [13, 13] })}
           <circle cx="1250" cy="424" r="64" fill="#ff4fd8" opacity=".18"/>
           <circle cx="1250" cy="424" r="64" fill="none" stroke="#5ff2ff" stroke-width="4" class="flick"/>
-          <text x="1250" y="437" text-anchor="middle" font-family="'Arial Black', Arial, sans-serif" font-weight="900" font-size="34" fill="#5ff2ff" class="flick">FINE</text>
+          ${slot('holo', (text) => fitText(text, { x: 1250, y: 437, size: 34, font: 'black', weight: 900, width: 106, anchor: 'middle', fill: '#5ff2ff', extra: 'class="flick"' }))}
           ${sceneFlames(520, 470, 200, 150, 3, 74, 'lv-2')}
           ${sceneFlames(980, 430, 180, 170, 3, 75, 'lv-3')}
           ${skyline({ seed: 72, x0: 430, x1: 1520, base: 782, min: 90, max: 300, fill: '#130a2e', lit: '#ff4fd8', chance: 0.13, win: [6, 14], gap: [14, 14] })}
@@ -877,19 +1119,22 @@
         <path d="M800 310v470M1160 310v470" stroke="#07040f" stroke-width="14"/>
         <path d="M456 326h120l-104 170z" fill="#fff" opacity=".07"/>
 
-        <g transform="rotate(-6 236 440)" font-family="'Brush Script MT', 'Segoe Script', 'Snell Roundhand', cursive" font-size="68" text-anchor="middle" fill="none">
-          <text x="236" y="456" stroke="#ff4fd8" stroke-width="10" opacity=".85" filter="url(#cy-neon)">it’s fine</text>
-          <text x="236" y="456" stroke="#ffd1f4" stroke-width="2.5" class="flick">it’s fine</text>
+        <g transform="rotate(-6 236 440)" fill="none">
+          ${slot('neon', (text) => {
+            const tube = { x: 236, y: 456, size: 68, font: 'script', width: 360, anchor: 'middle' };
+            return fitText(text, { ...tube, extra: 'stroke="#ff4fd8" stroke-width="10" opacity=".85" filter="url(#cy-neon)"' }) +
+              fitText(text, { ...tube, extra: 'stroke="#ffd1f4" stroke-width="2.5" class="flick"' });
+          })}
         </g>
         <rect x="70" y="560" width="330" height="10" fill="#3a1f6e"/>
-        <rect x="96" y="520" width="44" height="40" rx="4" fill="#5ff2ff" opacity=".7" class="pulse" style="--t:2.2s"/>
+        <rect x="96" y="520" width="44" height="40" rx="4" fill="#5ff2ff" class="pulse" style="--t:2.2s;--o:.7"/>
         <rect x="160" y="530" width="70" height="30" rx="4" fill="#1b0f3a" stroke="#ff4fd8" stroke-width="2"/>
         <path d="M330 560v-30M330 536c-18-4-28-16-28-28M330 540c16-6 26-16 28-30" fill="none" stroke="#3c7d49" stroke-width="5" stroke-linecap="round"/>
         <rect x="80" y="620" width="150" height="280" rx="8" fill="#0b0618" stroke="#3a1f6e" stroke-width="3"/>
         ${leds}
         <rect x="270" y="620" width="120" height="170" fill="#1b0f3a" stroke="#5ff2ff" stroke-width="2"/>
         <circle cx="330" cy="684" r="30" fill="none" stroke="#ff4fd8" stroke-width="4"/>
-        <text x="330" y="762" text-anchor="middle" font-family="'Arial Black', Arial, sans-serif" font-weight="900" font-size="24" fill="#5ff2ff">2099</text>
+        ${slot('poster', (text) => fitText(text, { x: 330, y: 762, size: 24, font: 'black', weight: 900, width: 100, anchor: 'middle', fill: '#5ff2ff' }))}
         <g fill="none" stroke="#07040f" stroke-width="6" stroke-linecap="round"><path class="sway" d="M520 270c10 60-20 90 0 150"/><path class="sway" style="--t:4.6s;--d:-2s" d="M1548 270c-12 80 16 120-4 200"/></g>
 
         <rect y="900" width="1600" height="500" fill="url(#cy-floor)"/>
@@ -902,7 +1147,7 @@
   };
 
   /* ------------------------------------------------------------------------
-     04 — Art: cast
+     05 — Art: cast
      Everything here is drawn around the character's hip (0, 0): the seat is
      at y = 0, the floor at y = 125 and every table top at y = -78. One shared
      skeleton means every character can strike every pose with every prop.
@@ -1054,14 +1299,20 @@
     },
   };
 
-  const BOOK_TITLES = [
-    ['FIRE', 'SAFETY', 'BASICS'], ['HOW TO', 'STAY', 'CALM'], ['THE ART', 'OF', 'DENIAL'],
-    ['IGNORING', 'THINGS', 'VOL. 2'], ['COOKING', 'WITH', 'FIRE'], ['INNER', 'PEACE', '101'],
-  ];
+  const BOOK_TITLES = ['FIRE SAFETY BASICS', 'HOW TO STAY CALM', 'THE ART OF DENIAL', 'IGNORING THINGS VOL. 2', 'COOKING WITH FIRE', 'INNER PEACE 101'];
 
   const heart = 'M0 0c-6-8-16-2-12 6c2 5 8 8 12 12c4-4 10-7 12-12c4-8-6-14-12-6z';
-  const pill = (x, y, w, fill, ink, label, style) =>
-    `<g class="rise" style="${style}"><rect x="${x}" y="${y}" width="${w}" height="20" rx="10" fill="${fill}" ${ol(3)}/><text x="${x + w / 2}" y="${y + 14}" text-anchor="middle" fill="${ink}">${label}</text></g>`;
+
+  /** Timing for something that floats up and fades (`.rise`): `phase` (0–1) is where in the cycle it starts. */
+  const rising = (seconds, phase, drift) => `--t:${seconds}s;--d:${n(-seconds * phase, 2)}s;--p:${phase};--rx:${drift}px`;
+
+  /** A notification bubble, centred on `cx`, that grows with its label (up to a point). */
+  const pill = (id, cx, y, min, fill, ink, style) => slot(id, (label) => {
+    const type = { size: 11, weight: 700 };
+    const w = clamp(textWidth(label, type) + 13, min, 100);
+    return `<g class="rise" style="${style}"><rect x="${n(cx - w / 2)}" y="${y}" width="${n(w)}" height="20" rx="10" fill="${fill}" ${ol(3)}/>` +
+      `${fitText(label, { ...type, x: cx, y: y + 14, width: w - 12, anchor: 'middle', fill: ink })}</g>`;
+  });
 
   /** Activity props, each drawn around its own origin. */
   const PROPS = {
@@ -1070,25 +1321,26 @@
       <path d="M-70 -7H60L70 0H-76Z" fill="#c9d1d9" ${ol()}/>
       <path d="M-58 -7H50" stroke="#8b959e" stroke-width="3" stroke-dasharray="5 4"/>
       <path d="M58 -7H67L103 -108L94 -110Z" fill="#aeb8c2" ${ol()}/>
-      <g ${FONT_SANS} font-weight="700" font-size="11">
-        ${pill(18, -150, 58, '#e2330f', '#fff', 'URGENT', '--t:5s;--rx:-10px')}
-        ${pill(-26, -140, 76, '#fbfdff', '#26323d', 'RE: RE: RE:', '--t:5s;--d:-1.7s;--rx:14px')}
-        ${pill(30, -132, 46, '#f2c230', '#26323d', 'ASAP', '--t:5s;--d:-3.4s;--rx:2px')}
-      </g>`,
-    book: (title) => `
+      ${pill('mail1', 47, -150, 58, '#e2330f', '#fff', rising(5, 0, -10))}
+      ${pill('mail2', 12, -140, 76, '#fbfdff', '#26323d', rising(5, 0.34, 14))}
+      ${pill('mail3', 53, -132, 46, '#f2c230', '#26323d', rising(5, 0.68, 2))}`,
+    book: () => `
       <path d="M-45 -50h9v104h-9z" fill="#fbf6ee" ${ol(4)}/>
       <rect x="-38" y="-54" width="80" height="108" rx="5" fill="#2f6d5e" ${ol()}/>
       <path d="M-29 -52v104" stroke="#1f4d42" stroke-width="5"/>
       <rect x="-21" y="-42" width="56" height="48" rx="3" fill="none" stroke="#f6e7c1" stroke-width="2"/>
-      <text ${FONT_SERIF} font-weight="700" font-size="${title.some((line) => line.length > 7) ? 9 : 10.5}" text-anchor="middle" fill="#f6e7c1">${title.map((line, i) => `<tspan x="7" y="${-25 + i * 13}">${line}</tspan>`).join('')}</text>
+      ${slot('book', (title) => {
+        const lines = wrapWords(title, 8, 3);
+        return fitLines(lines, { x: 7, size: 10.5, font: 'serif', weight: 700, width: 50, anchor: 'middle', fill: '#f6e7c1', baseline: centred(-18, 10.5, 13, lines.length) });
+      })}
       <path d="${flamePath(22, 30)}" transform="translate(7 44)" fill="#ff8a2a"/>`,
     phone: () => `
       <path class="screen-glow" d="M-16 -30L-92 -58L-98 46L-16 30Z" fill="url(#c-screen)"/>
       <rect x="-17" y="-34" width="34" height="68" rx="8" fill="#e2482f" ${ol()}/>
       <rect x="-10" y="-27" width="15" height="17" rx="4" fill="${OL}"/><circle cx="-5" cy="-22" r="2.5" fill="#6fc3ff"/><circle cx="0" cy="-16" r="2" fill="#6fc3ff"/>
-      <g class="rise" style="--t:3.6s;--rx:-12px"><path d="${heart}" transform="translate(-6 -54) scale(.8)" fill="#ff4f7a" ${ol(3)}/></g>
-      <g class="rise" style="--t:3.6s;--d:-1.3s;--rx:10px"><path d="${flamePath(18, 26)}" transform="translate(8 -44)" fill="#ff8a2a" ${ol(3)}/></g>
-      <g class="rise" style="--t:3.6s;--d:-2.4s;--rx:-2px"><path d="${heart}" transform="translate(2 -50) scale(.6)" fill="#ff4f7a" ${ol(3)}/></g>`,
+      <g class="rise" style="${rising(3.6, 0, -12)}"><path d="${heart}" transform="translate(-6 -54) scale(.8)" fill="#ff4f7a" ${ol(3)}/></g>
+      <g class="rise" style="${rising(3.6, 0.36, 10)}"><path d="${flamePath(18, 26)}" transform="translate(8 -44)" fill="#ff8a2a" ${ol(3)}/></g>
+      <g class="rise" style="${rising(3.6, 0.67, -2)}"><path d="${heart}" transform="translate(2 -50) scale(.6)" fill="#ff4f7a" ${ol(3)}/></g>`,
     controller: () => `
       <g class="rumble">
         <path d="M-44 -14H44C58 -14 62 8 56 20C50 30 38 26 32 14H-32C-38 26 -50 30 -56 20C-62 8 -58 -14 -44 -14Z" fill="#2b2f3a" ${ol()}/>
@@ -1096,21 +1348,34 @@
         <circle cx="30" cy="-4" r="4" fill="#5ff2ff"/><circle cx="38" cy="4" r="4" fill="#ff4fd8"/><circle cx="22" cy="4" r="4" fill="#b6ff3a"/><circle cx="30" cy="12" r="4" fill="#f2c230"/>
         <path class="rgb rgb--line" d="M-12 -9h24" stroke-width="4" stroke-linecap="round"/>
       </g>`,
+    /*
+     * The monitor is turned towards the player on the left and seen three-quarters on from
+     * slightly above, so its far (left) edge is the short one and both long edges fall away
+     * to the right. The picture is laid out flat on a 160 × 104 screen and mapped onto that
+     * slanted panel twice: once hung from the top edge (the HUD) and once standing on the
+     * bottom edge (floor grid, flames, light strip). The clip path trims the difference.
+     */
     monitor: () => `
-      <ellipse cx="0" cy="-2" rx="36" ry="6" fill="#20262c" ${ol(4)}/>
-      <rect x="-6" y="-28" width="12" height="26" fill="#20262c" ${ol(4)}/>
-      <path class="screen-glow" d="M-60 -122L-196 -152L-206 -6L-60 -20Z" fill="url(#c-screen)"/>
-      <g transform="translate(-62 -126) skewY(-6)">
-        <rect width="124" height="100" rx="6" fill="#14161b" ${ol()}/>
-        <rect x="7" y="7" width="110" height="80" fill="#12072e"/>
-        <path d="M7 62h110M7 74h110M30 50L7 87M62 50v37M94 50l23 37" stroke="#ff4fd8" stroke-width="1.5" opacity=".7"/>
-        ${sceneFlames(7, 87, 110, 30, 6, 91, '', 'c')}
-        <g font-family="'Courier New', Courier, monospace" font-weight="700" text-anchor="middle">
-          <text x="62" y="28" font-size="13" fill="#5ff2ff">HI 999999</text>
-          <text x="62" y="44" font-size="11" fill="#b6ff3a" class="blink-led" style="--t:.8s">LEVEL: FINE</text>
+      <defs><clipPath id="c-game"><path d="M-53 -146L33 -139V-35L-53 -50Z"/></clipPath></defs>
+      <ellipse class="screen-glow" cx="-62" cy="2" rx="84" ry="10" fill="url(#c-spill)"/>
+      <ellipse cx="8" cy="-2" rx="40" ry="7" fill="#20262c" ${ol(4)}/>
+      <path d="M1 -4V-42H15V-4Z" fill="#20262c" ${ol(4)}/>
+      <path class="screen-glow" d="M-58 -148L-196 -176L-210 -10L-58 -48Z" fill="url(#c-screen)"/>
+      <path d="M38 -146L51 -148.5V-28L38 -24Z" fill="#0b0d11" ${ol()}/>
+      <path d="M-58 -152L38 -146V-24L-58 -42Z" fill="#1b1f27" ${ol()}/>
+      <path d="M-53 -146L33 -139V-35L-53 -50Z" fill="#12072e"/>
+      <g clip-path="url(#c-game)">
+        <g transform="matrix(.5375 .0938 0 1 -53 -50)">
+          <path d="M0 -46h160M0 -31h160M0 -16h160M40 -46L0 0M80 -46V0M120 -46L160 0" stroke="#ff4fd8" stroke-width="1.5" opacity=".7"/>
+          ${sceneFlames(0, 0, 160, 38, 6, 91, '', 'c')}
         </g>
-        <path class="rgb rgb--line" d="M4 97h116" stroke-width="3"/>
-      </g>`,
+        <g transform="matrix(.5375 .0438 0 1 -53 -146)">
+          ${slot('game1', (text) => fitText(text, { x: 80, y: 29, size: 20, font: 'mono', weight: 700, width: 142, anchor: 'middle', fill: '#5ff2ff' }))}
+          ${slot('game2', (text) => fitText(text, { x: 80, y: 49, size: 16, font: 'mono', weight: 700, width: 142, anchor: 'middle', fill: '#b6ff3a', extra: 'class="blink-led" style="--t:.8s"' }))}
+        </g>
+        <path d="M-53 -146L-18 -143L-53 -92Z" fill="#fff" opacity=".1"/>
+      </g>
+      <g transform="matrix(.5375 .0938 0 1 -53 -50)"><path class="rgb rgb--line" d="M4 4h152" stroke-width="3" stroke-linecap="round"/></g>`,
   };
 
   const SHOULDER = { near: [20, -150], far: [46, -146] };
@@ -1230,12 +1495,12 @@
         <rect x="-4" y="-140" width="64" height="76" rx="10" fill="#22303c" ${ol(4)}/>
         <circle cx="16" cy="-116" r="13" fill="#0f1c26" stroke="#5ff2ff" stroke-width="2.5"/>
         <g transform="translate(16 -116)"><path class="sway" style="--t:.5s" d="M0 0V10" stroke="#ff5a3c" stroke-width="3" stroke-linecap="round"/></g>
-        <circle cx="42" cy="-124" r="5" fill="#57f287" class="blink-led" style="--t:1.6s"/><circle cx="42" cy="-108" r="5" fill="#f2c230" class="blink-led" style="--t:.9s"/><circle cx="42" cy="-92" r="5" fill="#ff5a3c" class="lv-3 blink-led" style="--t:.4s"/>
+        <circle cx="42" cy="-124" r="5" fill="#57f287" class="blink-led" style="--t:1.6s"/><circle cx="42" cy="-108" r="5" fill="#f2c230" class="blink-led" style="--t:.9s"/><g class="lv-3"><circle cx="42" cy="-92" r="5" fill="#ff5a3c" class="blink-led" style="--t:.4s"/></g>
         <path d="M4 -82h22M4 -74h22" stroke="#5ff2ff" stroke-width="3" stroke-linecap="round" opacity=".7"/>
         <path d="M-46 -140h24M-46 -126h24M-46 -112h24" stroke="#8e9cab" stroke-width="5" stroke-linecap="round"/>
         <g fill="#8e9cab"><circle cx="-50" cy="-160" r="4"/><circle cx="62" cy="-160" r="4"/><circle cx="-50" cy="-12" r="4"/><circle cx="62" cy="-12" r="4"/></g>`,
       head: () => `
-        <path d="M0 -66V-104" fill="none" ${ol()}/><circle cx="0" cy="-110" r="10" fill="#ff5a3c" ${ol(4)}/><circle cx="0" cy="-110" r="10" fill="#fff" opacity=".5" class="blink-led" style="--t:1s"/>
+        <path d="M0 -66V-104" fill="none" ${ol()}/><circle cx="0" cy="-110" r="10" fill="#ff5a3c" ${ol(4)}/><circle cx="0" cy="-110" r="10" fill="#fff" class="blink-led" style="--t:1s;--o:.5"/>
         <circle cx="-78" cy="-2" r="16" fill="#8e9cab" ${ol()}/>
         <rect x="-76" y="-68" width="164" height="132" rx="26" fill="#c3ced8" ${ol()}/>
         <path d="M-60 -56h132" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity=".5"/>
@@ -1275,7 +1540,7 @@
   };
 
   /* ------------------------------------------------------------------------
-     05 — Scene
+     06 — Scene
      Composes the two illustrated SVG layers from the current config.
      ------------------------------------------------------------------------ */
 
@@ -1333,6 +1598,7 @@
         <linearGradient id="c-fo" x2="0" y2="1"><stop offset="0" stop-color="#e2330f"/><stop offset=".5" stop-color="#ff7a1a"/><stop offset="1" stop-color="#ffc24a"/></linearGradient>
         <linearGradient id="c-fi" x2="0" y2="1"><stop offset="0" stop-color="#ffc23d"/><stop offset="1" stop-color="#fff3b0"/></linearGradient>
         <linearGradient id="c-screen" x1="1" x2="0"><stop offset="0" stop-color="#c6f6ff" stop-opacity=".8"/><stop offset="1" stop-color="#5fd0ff" stop-opacity="0"/></linearGradient>
+        <radialGradient id="c-spill"><stop offset="0" stop-color="#9fe9ff" stop-opacity=".55"/><stop offset="1" stop-color="#5fd0ff" stop-opacity="0"/></radialGradient>
         <radialGradient id="c-volt"><stop offset="0" stop-color="#b6ff3a" stop-opacity=".7"/><stop offset="1" stop-color="#b6ff3a" stop-opacity="0"/></radialGradient>
         <radialGradient id="c-shadow"><stop offset="0" stop-color="#0a0302" stop-opacity=".75"/><stop offset="1" stop-color="#0a0302" stop-opacity="0"/></radialGradient>
         <linearGradient id="c-long" x2="0" y2="1"><stop offset="0" stop-color="#0a0302" stop-opacity=".5"/><stop offset="1" stop-color="#0a0302" stop-opacity="0"/></linearGradient>
@@ -1355,13 +1621,18 @@
       if (wall && Eggs.has('note')) {
         const [x, y] = wall;
         out += `<g class="crooked" style="--dir:.7"><rect x="${x}" y="${y}" width="80" height="76" fill="#ffe36b"/><path d="M${x + 80} ${y + 76}h-18l18 -18z" fill="#d9bb45"/>
-          <text font-family="'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive" font-size="14" font-weight="700" fill="#3b2a12"><tspan x="${x + 9}" y="${y + 23}">TO DO:</tspan><tspan x="${x + 9}" y="${y + 43}" text-decoration="line-through">panic</tspan><tspan x="${x + 9}" y="${y + 62}">(later)</tspan></text></g>`;
+          ${slot('sticky', (text) => fitLines(wrapWords(text, 7, 3), {
+            x: x + 9, size: 14, font: 'comic', weight: 700, width: 62, fill: '#3b2a12',
+            baseline: (i) => y + 23 + i * 19.5,
+            // The original joke crosses out its own second line.
+            each: (line, i) => (i === 1 && text === TEXT_SLOTS.sticky.base ? 'text-decoration="line-through"' : ''),
+          }))}</g>`;
       } else if (wall && Eggs.has('detector')) {
         const [x, y] = [wall[0] + 40, wall[1] + 36];
         out += `<circle cx="${x}" cy="${y}" r="32" fill="#f4f1ec"/><circle cx="${x}" cy="${y}" r="32" fill="none" stroke="#b9b3a4" stroke-width="3"/>
           <path d="M${x - 16} ${y - 8}h32M${x - 18} ${y}h36M${x - 16} ${y + 8}h32" stroke="#b9b3a4" stroke-width="3" stroke-linecap="round"/>
           <circle cx="${x + 18}" cy="${y - 18}" r="4" fill="#ff3b30" class="blink-led" style="--t:2.4s"/>
-          <text class="beep" x="${x + 40}" y="${y - 22}" font-family="'Comic Sans MS', 'Chalkboard SE', cursive" font-size="20" font-weight="700" fill="#fff8e6">chirp!</text>`;
+          ${slot('chirp', (text) => fitText(text, { x: x + 40, y: y - 22, size: 20, font: 'comic', weight: 700, width: 60, fill: '#fff8e6', extra: 'class="beep"' }))}`;
       }
       if (Eggs.has('mouse')) {
         out += `<g class="scurry"><g transform="translate(1700 ${WORLD.floor - 4})">
@@ -1390,7 +1661,7 @@
           ${limb('M-8 -106h-20l-8 30', '#2b2b33', 4, 3)}
           <rect x="-20" y="-96" width="40" height="96" rx="12" fill="#d2301f" ${ol()}/>
           <rect x="-13" y="-68" width="26" height="28" rx="3" fill="#fbf6ee" ${ol(3)}/>
-          <text x="0" y="-50" text-anchor="middle" ${FONT_SANS} font-weight="700" font-size="7.5" fill="#d2301f">EMPTY</text>
+          ${slot('tank', (text) => fitText(text, { x: 0, y: -50, size: 7.5, weight: 700, width: 22, anchor: 'middle', fill: '#d2301f' }))}
           <rect x="-8" y="-112" width="16" height="18" rx="3" fill="#2b2b33" ${ol(4)}/><path d="M6 -110l22 -10" ${ol(5)}/>
           ${sceneFlames(-24, -112, 48, 56, 1, 97, 'lv-2', 'c')}</g>`;
       }
@@ -1405,10 +1676,10 @@
       const pop = (keys, inner) => `<g class="${keys.some((key) => changed.includes(key)) ? 'pop-in' : ''}">${inner}</g>`;
 
       let cup = drink.art();
-      if (config.drink === 'coffee' && Eggs.mug) {
-        // Slogan mug. When it is held, nudge the lettering clear of the paw.
-        const x = pose.drink === 'held' ? 9 : -1;
-        cup += `<text x="${x}" y="-24" text-anchor="middle" ${FONT_SANS} font-weight="700" font-size="${Eggs.mug.length > 2 ? 10.5 : 16}" fill="#c0392b">${Eggs.mug}</text>`;
+      if (config.drink === 'coffee') {
+        // Slogan mug. When it is held, the lettering moves clear of the paw.
+        const [x, width] = pose.drink === 'held' ? [9, 30] : [-1, 38];
+        cup += slot('mug', (text) => (text ? fitText(text, { x, y: -24, size: text.length > 2 ? 10.5 : 16, weight: 700, width, anchor: 'middle', fill: '#c0392b' }) : ''));
       }
       const cupArt = pop(['drink'], cup);
 
@@ -1421,13 +1692,13 @@
       } else {
         onTable += `<g transform="translate(${pose.drink} ${TABLE_Y})">${cupArt}</g>`;
       }
-      const prop = (name, x, y, rotate, arg) => `<g transform="translate(${x} ${y}) rotate(${rotate})">${pop(['activity'], PROPS[name](arg))}</g>`;
+      const prop = (name, x, y, rotate) => `<g transform="translate(${x} ${y}) rotate(${rotate})">${pop(['activity'], PROPS[name]())}</g>`;
       if (config.activity === 'laptop') onTable += prop('laptop', 232, TABLE_Y, 0);
       if (config.activity === 'gaming') {
-        onTable += prop('monitor', 330, TABLE_Y, 0);
+        onTable += prop('monitor', 338, TABLE_Y, 0);
         between = prop('controller', 142, -124, 0);
       }
-      if (config.activity === 'book') between = prop('book', 150, -166, -8, Eggs.book);
+      if (config.activity === 'book') between = prop('book', 150, -166, -8);
       if (config.activity === 'phone') inHand = prop('phone', 4, -22, -12);
 
       const swap = changed.includes('character') || changed.includes('environment') ? ' is-swap' : '';
@@ -1503,7 +1774,7 @@
   })();
 
   /* ------------------------------------------------------------------------
-     06 — FX
+     07 — FX
      All the fire lives on two canvases: one behind the cast, one in front.
        back  : firelight glow, floor reflections, back flames (heat-distorted)
        front : foreground flames, out-of-focus flames + smoke (low-res buffer),
@@ -1562,6 +1833,8 @@
       { dx: 0, w: 1, h: 1, lean: 0, phase: 0 },
     ];
     const LAYERS = [['outer', 1, 1], ['mid', 0.66, 0.72], ['core', 0.36, 0.44]];
+    // Out-of-focus flames sit in the vignetted corners, where a pale core would only turn muddy
+    const SOFT_LAYERS = LAYERS.slice(0, 2);
 
     // Per disaster level (index 0 unused)
     const HEIGHT = [0, 0.5, 0.74, 1, 1.28];
@@ -1596,6 +1869,8 @@
     const embers = [];
     const puffs = [];
     const clouds = [];
+    const sparking = []; // scratch lists, refilled every frame: fires tall enough to throw sparks…
+    const smoking = []; // …and the ones allowed to smoke
     const light = { all: 0.8, left: 0.8, right: 0.8 };
 
     /* — Sprites & gradients — */
@@ -1753,8 +2028,8 @@
       ctx.closePath();
     }
 
-    /** One fire = three tongues × three nested colour layers, every control point wandering on noise. */
-    function drawFire(ctx, fire, x, y) {
+    /** One fire = three tongues × up to three nested colour layers, every control point wandering on noise. */
+    function drawFire(ctx, fire, x, y, layers = LAYERS) {
       const g = fire.grow;
       if (g < 0.02) return;
       const grads = gradientsFor(ctx);
@@ -1763,7 +2038,7 @@
       const h = fire.h * g * heightNow * (0.84 + noise(t * 1.9 + s) * 0.32);
       const w = fire.w * (0.55 + 0.45 * g) * (0.92 + noise(t * 1.3 + s * 2.3) * 0.16);
       const sway = (noise(t * 0.9 + s * 5.1) - 0.5) * 0.9 + wind;
-      for (const [name, lw, lh] of LAYERS) {
+      for (const [name, lw, lh] of layers) {
         ctx.fillStyle = grads[name];
         for (const part of TONGUES) {
           const tt = t + part.phase + s;
@@ -1864,8 +2139,16 @@
     }
 
     function emit(step, motion) {
-      const active = flames.filter((fire) => fire.grow > 0.4);
-      if (!active.length) return;
+      sparking.length = 0;
+      smoking.length = 0;
+      const centre = visible.x + visible.w / 2;
+      for (const fire of flames) {
+        if (fire.grow <= 0.4) continue;
+        sparking.push(fire);
+        // Foreground smoke only comes off the fires at the edges of the frame, so the cast stays clear
+        if (fire.layer === 'back' || Math.abs(fire.x - centre) > visible.w * 0.3) smoking.push(fire);
+      }
+      if (!sparking.length) return;
       const area = clamp((vw * vh) / (1440 * 900), 0.45, 1.5);
       const thin = (quality === 'low' ? 0.5 : 1) * (motion < 1 ? 0.3 : 1);
       const tip = (fire, spread, lo, hi) => toScreen(
@@ -1876,7 +2159,7 @@
       emberDebt += EMBER_RATE[level] * area * thin * step;
       while (emberDebt >= 1) {
         emberDebt -= 1;
-        const [x, y] = tip(pick(active), 0.35, 0.3, 0.95);
+        const [x, y] = tip(pick(sparking), 0.35, 0.3, 0.95);
         spawnEmber(x, clamp(y, -20, vh + 20));
       }
       // The odd large, out-of-focus ember drifting right past the lens
@@ -1884,16 +2167,12 @@
         embers.push({ x: rand(0, vw), y: vh + 30, vx: rand(-60, 60), vy: -rand(140, 300), life: 0, ttl: rand(2.5, 4.5), size: rand(9, 22), seed: rand(0, 1000), big: true });
       }
 
-      smokeDebt += SMOKE_RATE[level] * area * thin * step;
-      while (smokeDebt >= 1 && puffs.length < 90) {
+      smokeDebt = Math.min(smokeDebt + SMOKE_RATE[level] * area * thin * step, 4);
+      while (smokeDebt >= 1 && smoking.length && puffs.length < 90) {
         smokeDebt -= 1;
-        // Foreground smoke only comes off the fires at the edges of the frame, so the cast stays clear
-        const centre = visible.x + visible.w / 2;
-        const sources = active.filter((fire) => fire.layer === 'back' || Math.abs(fire.x - centre) > visible.w * 0.3);
-        if (!sources.length) break;
-        const fire = pick(sources);
+        const fire = pick(smoking);
         const [x, y] = tip(fire, 0.2, 0.8, 1);
-        puffs.push({ layer: fire.layer, x, y, vx: rand(-12, 12), vy: -rand(28, 64), r: rand(40, 90), swell: rand(18, 42), life: 0, ttl: rand(4, 8), alpha: rand(0.3, 0.62), variant: Math.floor(rand(0, 3)) });
+        puffs.push({ layer: fire.layer, x, y, vx: rand(-12, 12), vy: -rand(28, 64), r: rand(60, 120), swell: rand(20, 44), life: 0, ttl: rand(4, 8), alpha: rand(0.2, 0.44), variant: Math.floor(rand(0, 3)) });
       }
     }
 
@@ -1902,7 +2181,9 @@
         const e = embers[i];
         e.life += step;
         if (e.life > e.ttl || e.y < -60) {
-          embers.splice(i, 1);
+          // Sparks are drawn additively, so their order is irrelevant: fill the gap with the last one
+          embers[i] = embers[embers.length - 1];
+          embers.pop();
           continue;
         }
         e.vx += ((noise(e.seed + time * 0.7) - 0.5) * 280 + wind * 90) * step;
@@ -1934,7 +2215,7 @@
       for (const p of puffs) {
         if (p.layer !== layer) continue;
         const r = p.r + p.swell * p.life;
-        ctx.globalAlpha = p.alpha * Math.min(1, p.life / 0.7) * (1 - p.life / p.ttl);
+        ctx.globalAlpha = p.alpha * Math.min(1, p.life / 1.1) * (1 - p.life / p.ttl);
         ctx.drawImage(smoke[p.variant], p.x - r, p.y - r, r * 2, r * 2);
       }
       ctx.globalAlpha = 1;
@@ -1953,13 +2234,13 @@
       for (const fire of bokehFlames) drawGlow(softCtx, fire, fire.x + ox, fire.y + oy, 0.55);
       softCtx.globalCompositeOperation = 'source-over';
       softCtx.globalAlpha = 0.94;
-      for (const fire of bokehFlames) drawFire(softCtx, fire, fire.x + ox, fire.y + oy);
+      for (const fire of bokehFlames) drawFire(softCtx, fire, fire.x + ox, fire.y + oy, SOFT_LAYERS);
       drawPuffs(softCtx, 'front');
 
       // The smoke ceiling: a rolling bank that thickens and sinks as things get worse
       const sink = ceiling * vh * 0.17;
       const haze = softCtx.createLinearGradient(0, 0, 0, sink + vh * 0.16);
-      haze.addColorStop(0, `rgba(${palette.smoke},${0.9 * ceiling})`);
+      haze.addColorStop(0, `rgba(${palette.smoke},${0.8 * ceiling})`);
       haze.addColorStop(1, `rgba(${palette.smoke},0)`);
       softCtx.globalAlpha = 1;
       softCtx.fillStyle = haze;
@@ -2048,7 +2329,7 @@
   })();
 
   /* ------------------------------------------------------------------------
-     07 — Director
+     08 — Director
      Owns the render loop: camera framing per mode, pointer parallax, the
      flicker that ties DOM lighting to the canvas fire, screen shake, and a
      quality governor that sheds effects if the frame rate cannot keep up.
@@ -2104,6 +2385,7 @@
     let say = [0, 0];
     let bubbleSize = [0, 0];
     let bubbleLimit = vw;
+    let interest = null; // world-space spot the camera should keep in view, see lookAt()
     let shadows = [];
     let onBoom = () => {};
 
@@ -2155,9 +2437,36 @@
       const cramped = clamp((castWidth - free.w) / (castWidth * 0.25), 0, 1);
       let x = centre + cramped * (SUBJECT.cx - SUBJECT.who) * k * zoom;
       let y = free.y + free.h / 2 - vh / 2 - (SUBJECT.cy - WORLD.h / 2) * k * zoom;
-      x = clampAbs(x, (WORLD.w * k * zoom - vw) / 2 - margin);
+      if (interest) {
+        // Something off to the side needs a look: pan just far enough to bring it into the free area
+        const px = vw / 2 + x + (interest[0] - WORLD.w / 2) * k * zoom;
+        const py = vh / 2 + y + (interest[1] - WORLD.h / 2) * k * zoom;
+        const padX = Math.min(120, free.w * 0.22);
+        const padY = Math.min(90, free.h * 0.22);
+        x += clamp(px, free.x + padX, free.x + free.w - padX) - px;
+        y += clamp(py, free.y + padY, free.y + free.h - padY) - py;
+      }
+      // …and the studio panel hides the painting's right edge, so such a look may pan that much further
+      const limit = Math.max(0, (WORLD.w * k * zoom - vw) / 2 - margin);
+      x = clamp(x, -limit - (interest && mode === 'studio' && !sheet ? vw - bubbleLimit : 0), limit);
       if (covers) y = clampAbs(y, (WORLD.h * k * zoom - vh) / 2 - margin);
       Object.assign(target, { x, y, zoom });
+    }
+
+    /**
+     * Keep a spot of the scene in view — `box` is where it is on screen right now — until
+     * called again with null. Used while a piece of lettering is being edited.
+     */
+    function lookAt(box) {
+      interest = null;
+      if (box && (box.width || box.height)) {
+        const scale = Math.max(vw / WORLD.w, vh / WORLD.h) * cam.zoom;
+        interest = [
+          WORLD.w / 2 + (box.left + box.width / 2 - vw / 2 - cam.x) / scale,
+          WORLD.h / 2 + (box.top + box.height / 2 - vh / 2 - cam.y) / scale,
+        ];
+      }
+      aim();
     }
 
     function measureBubble() {
@@ -2281,7 +2590,7 @@
 
       if (now - lastHud > 420) {
         lastHud = now;
-        const base = option('chaos', CATALOG.chaos[level - 1].id).temp;
+        const base = CATALOG.chaos[level - 1].temp;
         hudTemp.textContent = `${Math.round(base * (1 + (noise(clock * 0.8) - 0.5) * 0.06)).toLocaleString('en-US')}°C`;
       }
 
@@ -2338,6 +2647,7 @@
       start,
       configure,
       setMode,
+      lookAt,
       boom,
       measureBubble,
       set onBoom(handler) { onBoom = handler; },
@@ -2347,7 +2657,7 @@
   })();
 
   /* ------------------------------------------------------------------------
-     08 — Sound
+     09 — Sound
      Every sound is synthesised with Web Audio — no files to download. Nothing
      plays (and no AudioContext exists) until the visitor asks for it, which
      keeps us on the right side of browser autoplay policies.
@@ -2367,26 +2677,35 @@
     let white = null;
     let brown = null;
     let enabled = false;
+    let nap = 0;
     let config = { ...DEFAULTS };
     const manual = {}; // layers the visitor switched by hand; everything else follows the scene
     const bus = {};
     const nodes = {};
-    const timers = new Set();
+    const tickers = [];
 
     const isOn = (id) => (id in manual ? manual[id] : LAYERS.find((layer) => layer.id === id).auto(config));
     const intensity = () => INTENSITY[levelOf(config)];
 
-    /** setTimeout loop that reschedules itself; `fn` returns the delay to the next call in ms. */
+    /** Register a self-rescheduling timer; `fn` returns the delay to its next call in ms. See setAwake(). */
     function every(fn) {
-      const run = () => {
-        timers.delete(handle);
-        if (!ctx) return;
-        const delay = enabled && ctx.state === 'running' ? fn() : 400;
-        handle = window.setTimeout(run, delay);
-        timers.add(handle);
+      const ticker = {
+        handle: 0,
+        // The audio clock takes a moment to (re)start: idle until it is actually running
+        run() { ticker.handle = window.setTimeout(ticker.run, ctx.state === 'running' ? fn() : 300); },
       };
-      let handle = window.setTimeout(run, 200);
-      timers.add(handle);
+      tickers.push(ticker);
+    }
+
+    /** The audio clock and the timers only run while there is something to hear. */
+    function setAwake(awake, linger = 0) {
+      window.clearTimeout(nap);
+      for (const ticker of tickers) {
+        window.clearTimeout(ticker.handle);
+        if (awake) ticker.handle = window.setTimeout(ticker.run, 200);
+      }
+      if (awake) ctx.resume();
+      else nap = window.setTimeout(() => ctx.suspend(), linger); // let a fade-out finish first
     }
 
     function noiseBuffer(seconds, colour) {
@@ -2569,7 +2888,7 @@
       if (on && !ctx && !init()) return false;
       enabled = on;
       if (!ctx) return false;
-      if (on) ctx.resume();
+      setAwake(on, 700);
       master.gain.setTargetAtTime(on ? 0.85 : 0, ctx.currentTime, on ? 0.4 : 0.12);
       mix();
       return enabled;
@@ -2603,9 +2922,7 @@
     }
 
     document.addEventListener('visibilitychange', () => {
-      if (!ctx || !enabled) return;
-      if (document.hidden) ctx.suspend();
-      else ctx.resume();
+      if (ctx && enabled) setAwake(!document.hidden);
     });
 
     return {
@@ -2626,7 +2943,7 @@
   })();
 
   /* ------------------------------------------------------------------------
-     09 — Capture
+     10 — Capture
      PNG export and share links. The screenshot is a faithful re-composite of
      the live frame: each SVG layer is serialised with its *computed* styles
      (so every CSS animation is frozen exactly where it is), drawn through the
@@ -2635,6 +2952,26 @@
 
   const Capture = (() => {
     const INLINE = ['fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-dasharray', 'stroke-dashoffset', 'opacity', 'transform', 'transform-origin', 'transform-box', 'mix-blend-mode'];
+
+    const loadImage = (src) => new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('A scene layer could not be rasterised'));
+      image.src = src;
+    });
+
+    // Where in its cycle (ms) each lettering animation is easiest to read
+    const LEGIBLE_AT = { rise: 450, beep: 2980, 'blink-led': 0, flick: 0 };
+
+    /** A screenshot freezes every animation where it is; lettering should not be caught mid-blink or half faded. */
+    function poseLettering() {
+      for (const node of $$('#scene [data-slot]')) {
+        if (!node.getAnimations) return;
+        for (const animation of node.getAnimations({ subtree: true })) {
+          if (animation.animationName in LEGIBLE_AT) animation.currentTime = LEGIBLE_AT[animation.animationName];
+        }
+      }
+    }
 
     /** Standalone, style-inlined copy of a live SVG layer, rasterised to an <img>. */
     function rasterise(svg, resolution) {
@@ -2655,9 +2992,32 @@
       clone.setAttribute('height', Math.round(WORLD.h * resolution));
       clone.removeAttribute('class');
       clone.removeAttribute('preserveAspectRatio');
-      const image = new Image();
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`;
-      return image.decode().then(() => image);
+      return loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`);
+    }
+
+    /** Rounded rectangle as a sub-path (ctx.roundRect is still missing from some browsers in use). */
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    /**
+     * A CSS-style elliptical radial gradient painted over the whole vw × vh frame. Centre and
+     * radii are fractions of the frame, exactly as in `radial-gradient(rx ry at cx cy, …)`.
+     */
+    function ellipse(ctx, vw, vh, [cx, cy, rx, ry], stops) {
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      for (const [offset, colour] of stops) gradient.addColorStop(offset, colour);
+      ctx.save();
+      ctx.translate(cx * vw, cy * vh);
+      ctx.scale(rx * vw, ry * vh);
+      ctx.fillStyle = gradient;
+      ctx.fillRect(-cx / rx, -cy / ry, 1 / rx, 1 / ry);
+      ctx.restore();
     }
 
     function drawBubble(ctx, scale) {
@@ -2672,19 +3032,16 @@
       ctx.setTransform(scale, 0, 0, scale, 0, 0);
       ctx.lineJoin = 'round';
 
-      const outline = () => {
-        ctx.beginPath();
-        ctx.roundRect(box.left, box.top, box.width, box.height, radius);
-        ctx.moveTo(anchor.left, anchor.top);
-        ctx.lineTo(anchor.left + 22, box.bottom - 2);
-        ctx.lineTo(anchor.left + 50, box.bottom - 2);
-        ctx.closePath();
-      };
       ctx.fillStyle = 'rgba(20,6,2,.5)';
       ctx.beginPath();
-      ctx.roundRect(box.left + 7, box.top + 7, box.width, box.height, radius);
+      roundRect(ctx, box.left + 7, box.top + 7, box.width, box.height, radius);
       ctx.fill();
-      outline();
+      ctx.beginPath();
+      roundRect(ctx, box.left, box.top, box.width, box.height, radius);
+      ctx.moveTo(anchor.left, anchor.top);
+      ctx.lineTo(anchor.left + 22, box.bottom - 2);
+      ctx.lineTo(anchor.left + 50, box.bottom - 2);
+      ctx.closePath();
       ctx.strokeStyle = '#1b0d08';
       ctx.lineWidth = 6;
       ctx.stroke();
@@ -2697,16 +3054,22 @@
       ctx.textBaseline = 'middle';
       const padX = parseFloat(style.paddingLeft);
       const inner = box.width - padX - parseFloat(style.paddingRight) + 1;
+      const fits = (text) => ctx.measureText(text).width <= inner;
       const lines = [];
       let line = '';
-      for (const word of $('#bubble-text').textContent.split(/\s+/)) {
-        const attempt = line ? `${line} ${word}` : word;
-        if (line && ctx.measureText(attempt).width > inner) {
+      for (let word of $('#bubble-text').textContent.split(/\s+/)) {
+        if (line && !fits(`${line} ${word}`)) {
           lines.push(line);
-          line = word;
-        } else {
-          line = attempt;
+          line = '';
         }
+        // A word wider than the bubble breaks wherever it has to (overflow-wrap: anywhere)
+        while (!line && word.length > 1 && !fits(word)) {
+          let cut = word.length - 1;
+          while (cut > 1 && !fits(word.slice(0, cut))) cut--;
+          lines.push(word.slice(0, cut));
+          word = word.slice(cut);
+        }
+        line = line ? `${line} ${word}` : word;
       }
       lines.push(line);
       const lineHeight = size * 1.05;
@@ -2724,6 +3087,7 @@
       canvas.height = Math.round(vh * scale);
       const ctx = canvas.getContext('2d');
       const resolution = Math.min(2, k * cam.zoom * scale);
+      poseLettering();
       const [env, cast] = await Promise.all([rasterise($('#layer-env'), resolution), rasterise($('#layer-cast'), resolution)]);
 
       const layer = (image, depth) => {
@@ -2738,39 +3102,42 @@
         ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
       };
 
+      /** One of the DOM lighting overlays (see .light in style.css), at the strength it has on screen right now. */
+      const light = (id, blend, paint) => {
+        const style = window.getComputedStyle($(id));
+        if (style.display === 'none') return;
+        ctx.setTransform(scale, 0, 0, scale, 0, 0);
+        ctx.globalCompositeOperation = blend;
+        ctx.globalAlpha = parseFloat(style.opacity);
+        paint();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+      };
+      const linear = (x0, y0, x1, y1, stops) => {
+        const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+        for (const [offset, colour] of stops) gradient.addColorStop(offset, colour);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, vw, vh);
+      };
+
+      // Same stacking order as the page: room, back fire, cast, vignette, front fire, firelight, colour grade
       ctx.fillStyle = '#0b0503';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       layer(env, 0.5);
       overlay(FX.canvases.back);
       layer(cast, 1);
+      light('#light-vignette', 'source-over', () => {
+        ellipse(ctx, vw, vh, [0.5, 0.54, 0.78, 0.78], [[0, 'rgba(9,2,0,0)'], [0.52, 'rgba(9,2,0,0)'], [1, 'rgba(9,2,0,.62)']]);
+        linear(0, 0, 0, vh * 0.22, [[0, 'rgba(8,3,2,.42)'], [1, 'rgba(8,3,2,0)']]);
+      });
       overlay(FX.canvases.front);
-
-      // Lighting pass, matching the CSS overlays
-      const level = Store.level;
-      ctx.setTransform(scale, 0, 0, scale, 0, 0);
-      ctx.globalCompositeOperation = 'soft-light';
-      ctx.globalAlpha = [0, 0.38, 0.58, 0.82, 1][level] * 0.85;
-      let g = ctx.createRadialGradient(vw / 2, vh * 1.12, 0, vw / 2, vh * 1.12, Math.max(vw, vh) * 0.8);
-      g.addColorStop(0, 'rgba(255,160,60,.9)');
-      g.addColorStop(0.5, 'rgba(255,96,20,.3)');
-      g.addColorStop(1, 'rgba(255,96,20,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, vw, vh);
-      ctx.globalCompositeOperation = 'overlay';
-      ctx.globalAlpha = [0, 0.22, 0.48, 0.74, 1][level];
-      g = ctx.createLinearGradient(0, vh, 0, 0);
-      g.addColorStop(0, 'rgba(255,98,16,.5)');
-      g.addColorStop(0.46, 'rgba(196,44,8,.2)');
-      g.addColorStop(1, 'rgba(34,4,0,.62)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, vw, vh);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 1;
-      g = ctx.createRadialGradient(vw / 2, vh * 0.54, Math.min(vw, vh) * 0.4, vw / 2, vh * 0.54, Math.hypot(vw, vh) * 0.62);
-      g.addColorStop(0, 'rgba(9,2,0,0)');
-      g.addColorStop(1, 'rgba(9,2,0,.66)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, vw, vh);
+      light('#light-warm', 'soft-light', () => {
+        ellipse(ctx, vw, vh, [0.5, 1.12, 0.95, 0.7], [[0, 'rgba(255,160,60,.9)'], [0.44, 'rgba(255,96,20,.32)'], [0.74, 'rgba(255,96,20,0)']]);
+        for (const cx of [-0.06, 1.06]) ellipse(ctx, vw, vh, [cx, 0.78, 0.55, 0.85], [[0, 'rgba(255,120,30,.6)'], [0.62, 'rgba(255,120,30,0)']]);
+      });
+      light('#light-grade', 'overlay', () => {
+        linear(0, vh, 0, 0, [[0, 'rgba(255,98,16,.5)'], [0.46, 'rgba(196,44,8,.2)'], [1, 'rgba(34,4,0,.62)']]);
+      });
 
       drawBubble(ctx, scale);
 
@@ -2837,7 +3204,7 @@
   })();
 
   /* ------------------------------------------------------------------------
-     10 — UI
+     11 — UI
      ------------------------------------------------------------------------ */
 
   /** Things the character says. One pool per option, so the commentary always fits the scene. */
@@ -2889,9 +3256,13 @@
     const bubble = $('#bubble');
     const bubbleText = $('#bubble-text');
     const range = $('#chaos-range');
+    const pages = { main: $('#page-main'), text: $('#page-text') };
+    const textFields = $('#text-fields');
     const selects = {};
     let mode = 'hero';
+    let page = 'main';
     let quipTimer = 0;
+    let heldUntil = 0;
     let busy = false;
 
     /* — Toasts — */
@@ -2910,17 +3281,33 @@
 
     /* — Speech bubble — */
 
-    function say(text) {
+    /** Put a line in the bubble. `hold` (ms) keeps the banter from talking over it straight away. */
+    function say(text, { pop = true, hold = 0 } = {}) {
+      heldUntil = performance.now() + hold;
       bubbleText.textContent = text;
       bubble.hidden = false;
-      bubble.classList.remove('is-pop');
-      void bubble.offsetWidth; // restart the pop animation
-      bubble.classList.add('is-pop');
+      if (pop) {
+        bubble.classList.remove('is-pop');
+        void bubble.offsetWidth; // restart the pop animation
+        bubble.classList.add('is-pop');
+      }
       Director.measureBubble();
     }
 
     /** Pick a line that fits the scene; `focus` biases it towards the option that just changed. */
     function quip(focus) {
+      const wait = heldUntil - performance.now();
+      if (wait > 0) {
+        scheduleQuip(wait + 200);
+        return;
+      }
+      const own = Store.customText('say');
+      if (own) {
+        // The visitor put words in the character's mouth: that is all it has to say
+        window.clearTimeout(quipTimer);
+        if (bubble.hidden || bubbleText.textContent !== own) say(own);
+        return;
+      }
       const config = Store.config;
       const now = new Date();
       let pool = focus ? QUIPS[focus][config[focus]] : [
@@ -3121,6 +3508,11 @@
       if (on && !result) toast('This browser cannot play the ambience.', 'sound-off');
       Store.setSound(result);
       syncSound();
+      // The layer mixer unfolds at the very bottom of the panel: bring it into view once it has
+      if (result && mode === 'studio') {
+        const scroller = $('#studio-scroll');
+        window.setTimeout(() => scroller.scrollTo({ top: scroller.scrollHeight, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }), 460);
+      }
     }
 
     /** The visitor wanted sound last time: bring it back on their first interaction (autoplay rules). */
@@ -3132,6 +3524,108 @@
       };
       window.addEventListener('pointerdown', wake);
       window.addEventListener('keydown', wake);
+    }
+
+    /* — Customize text: one field for every piece of lettering in the scene — */
+
+    /** Point out the lettering a field belongs to: light it up and pan it into view (null: stop). */
+    function spotlight(id) {
+      const node = Lettering.highlight(id);
+      bubble.classList.toggle('is-editing', id === 'say');
+      Director.lookAt(node ? node.getBoundingClientRect() : null);
+    }
+
+    /** Reflect the store in one field (or, with no id, all of them) and in the "edited" badge. */
+    function syncText(id) {
+      for (const field of $$(id ? `.text-field[data-slot="${id}"]` : '.text-field', textFields)) {
+        const own = Store.customText(field.dataset.slot);
+        const input = $('input', field);
+        if (document.activeElement !== input) input.value = own; // never fight the visitor's typing
+        field.classList.toggle('is-custom', Boolean(own));
+      }
+      const edited = Lettering.present().filter((slotId) => Store.customText(slotId)).length;
+      const badge = $('#text-badge');
+      badge.hidden = !edited;
+      badge.textContent = `${edited} edited`;
+      $('#text-reset').setAttribute('aria-disabled', String(!Store.hasTexts));
+    }
+
+    function buildTextFields() {
+      spotlight(null);
+      let group = '';
+      let html = '';
+      for (const id of Lettering.present()) {
+        const spec = TEXT_SLOTS[id];
+        if (spec.group !== group) {
+          html += `${group ? '</div>' : ''}<div class="text-group" role="group" aria-label="${spec.group}"><p class="text-group__title" aria-hidden="true">${spec.group}</p>`;
+          group = spec.group;
+        }
+        html += `
+          <div class="text-field" data-slot="${id}">
+            <label class="text-field__label" for="text-${id}">${spec.label}</label>
+            <div class="text-field__box">
+              <input class="text-field__input" id="text-${id}" type="text" maxlength="${spec.max}" autocomplete="off" spellcheck="false" enterkeyhint="done"${spec.hint ? ` aria-describedby="hint-${id}"` : ''}>
+              <button class="text-field__undo" type="button" aria-label="${spec.label}: restore the original text"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg></button>
+            </div>
+            ${spec.hint ? `<p class="text-field__hint" id="hint-${id}">${spec.hint}</p>` : ''}
+          </div>`;
+      }
+      textFields.innerHTML = `${html}</div>`;
+      // The original wording is the placeholder: it shows what an empty field falls back to
+      for (const field of $$('.text-field', textFields)) $('input', field).placeholder = Store.baseText(field.dataset.slot) || 'Blank';
+      syncText();
+    }
+
+    /** The studio has two pages: the generator ('main') and the lettering editor ('text'). */
+    function showPage(next, { focus = true, animate = true } = {}) {
+      const turned = next !== page;
+      page = next;
+      // Once the visitor starts paging, content slides in as a whole instead of re-running the staggered entrance
+      studio.toggleAttribute('data-paged', animate);
+      studio.style.setProperty('--page-from', next === 'text' ? '28px' : '-28px');
+      for (const [name, node] of Object.entries(pages)) {
+        node.hidden = name !== next;
+        node.classList.toggle('is-entering', animate && turned && name === next);
+      }
+      Object.values(selects).forEach((select) => select.hide());
+      spotlight(null);
+      if (next === 'text') buildTextFields();
+      if (focus) {
+        // On touch screens focusing a field would throw the keyboard up uninvited
+        const touch = window.matchMedia('(pointer: coarse)').matches;
+        const node = next === 'text' ? $(touch ? '#text-back' : '.text-field__input', pages.text) : $('#btn-text');
+        node.focus({ preventScroll: true });
+      }
+    }
+
+    function initText() {
+      const slotOf = (node) => node.closest('.text-field').dataset.slot;
+      textFields.addEventListener('input', (event) => Store.setText(slotOf(event.target), event.target.value));
+      // Leaving a field tidies it up to what was actually stored (trimmed, single spaces)
+      textFields.addEventListener('change', (event) => { event.target.value = Store.customText(slotOf(event.target)); });
+      textFields.addEventListener('focusin', (event) => {
+        if (event.target.matches('input')) spotlight(slotOf(event.target));
+      });
+      textFields.addEventListener('focusout', () => spotlight(null));
+      textFields.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.isComposing && event.target.matches('input')) event.target.blur();
+      });
+      textFields.addEventListener('click', (event) => {
+        const undo = event.target.closest('.text-field__undo');
+        if (!undo) return;
+        Store.setText(slotOf(undo), '');
+        $('input', undo.parentElement).focus();
+      });
+
+      Store.onText((id) => {
+        Lettering.refresh(id);
+        syncText(id);
+        // The speech bubble is lettering too: a line of the visitor's own stays put, without one the banter resumes
+        if ((id && id !== 'say') || mode === 'hero') return;
+        say(Store.text('say'), { pop: false });
+        if (Store.customText('say')) window.clearTimeout(quipTimer);
+        else scheduleQuip();
+      });
     }
 
     /* — Keep every control in step with the store — */
@@ -3160,6 +3654,7 @@
       $$('.pip').forEach((pip, i) => {
         pip.classList.toggle('is-lit', i < level);
         pip.setAttribute('aria-checked', String(i === level - 1));
+        pip.tabIndex = i === level - 1 ? 0 : -1;
       });
       syncSound();
     }
@@ -3173,6 +3668,9 @@
       hero.inert = next !== 'hero';
       dock.inert = next !== 'view';
       Object.values(selects).forEach((select) => select.hide());
+      // The studio always opens on its first page; a page left open keeps showing while it slides away
+      if (next === 'studio') showPage('main', { focus: false, animate: false });
+      else spotlight(null);
       Director.setMode(next);
 
       if (next === 'hero') {
@@ -3180,8 +3678,8 @@
         bubble.hidden = true;
         scheduleQuip(2600);
       } else if (bubble.hidden) {
-        say('This is fine.');
-        scheduleQuip();
+        say(Store.text('say'));
+        if (!Store.customText('say')) scheduleQuip();
       }
       if (focus) {
         const targets = { hero: '#cta-create', studio: 'input[name="character"]:checked', view: '#dock-edit' };
@@ -3191,6 +3689,12 @@
     }
 
     const closeStudio = () => setMode(Store.hasCreation ? 'view' : 'hero');
+
+    /** Straight to the lettering editor, from wherever the visitor is. */
+    function editText() {
+      if (mode !== 'studio') setMode('studio', { focus: false });
+      showPage('text');
+    }
 
     /* — Actions — */
 
@@ -3237,6 +3741,12 @@
       toast('Back to the original. Still fine.', 'reset');
     }
 
+    function resetText() {
+      if (!Store.hasTexts) return;
+      Store.clearTexts();
+      toast('Original wording restored.', 'reset');
+    }
+
     function setLevel(level) {
       Store.set({ chaos: CATALOG.chaos[clamp(level, 1, 4) - 1].id });
     }
@@ -3248,12 +3758,24 @@
       buildTiles('drink', Scene.drinkIcon);
       buildSelect('activity', (item) => `<span class="select__icon" aria-hidden="true"><svg class="icon"><use href="#i-${item.id}"/></svg></span>`);
       buildSelect('environment', (item) => `<span class="select__icon select__icon--swatch" aria-hidden="true" style="--swatch:linear-gradient(160deg, ${item.swatch[0]}, ${item.swatch[1]})"></span>`);
+      initText();
 
-      $('#dock-levels').innerHTML = CATALOG.chaos.map((item, i) =>
-        `<button class="pip" type="button" role="radio" aria-checked="false" aria-label="${item.name}" style="--i:${i}"><i></i></button>`).join('');
-      $('#dock-levels').addEventListener('click', (event) => {
+      // Disaster level in the dock: a radio group, so one tab stop and arrow keys to move through it
+      const levels = $('#dock-levels');
+      levels.innerHTML = CATALOG.chaos.map((item, i) =>
+        `<button class="pip" type="button" role="radio" aria-checked="false" aria-label="${item.name}" tabindex="-1" style="--i:${i}"><i></i></button>`).join('');
+      const pips = $$('.pip', levels);
+      levels.addEventListener('click', (event) => {
         const pip = event.target.closest('.pip');
-        if (pip) setLevel($$('.pip').indexOf(pip) + 1);
+        if (pip) setLevel(pips.indexOf(pip) + 1);
+      });
+      levels.addEventListener('keydown', (event) => {
+        const step = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
+        const level = step ? clamp(Store.level + step, 1, 4) : { Home: 1, End: 4 }[event.key];
+        if (!level) return;
+        event.preventDefault();
+        setLevel(level);
+        pips[level - 1].focus();
       });
 
       $('#sound-chips').innerHTML = Sound.layers().map((layer) =>
@@ -3276,11 +3798,15 @@
         'dock-share': share,
         'dock-sound': () => setSound(!Sound.enabled),
         'studio-close': closeStudio,
+        'btn-text': () => showPage('text'),
         'btn-random': randomize,
         'btn-shot': screenshot,
         'btn-share': share,
         'btn-done': done,
         'btn-reset': reset,
+        'text-back': () => showPage('main'),
+        'text-reset': resetText,
+        'text-done': done,
         'sound-switch': () => setSound(!Sound.enabled),
         'bubble-btn': () => {
           quip();
@@ -3289,18 +3815,24 @@
       };
       for (const [id, handler] of Object.entries(actions)) $(`#${id}`).addEventListener('click', handler);
 
-      // Keyboard shortcuts — never while a dropdown is taking type-ahead input
+      // Keyboard shortcuts — never while a dropdown is taking type-ahead input or a text field is being typed in
       document.addEventListener('keydown', (event) => {
         if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
         if (event.target.closest('[role="combobox"]')) return;
         const key = event.key.toLowerCase();
-        if (key === 'escape' && mode === 'studio') closeStudio();
+        if (key === 'escape' && mode === 'studio') {
+          if (page === 'text') showPage('main');
+          else closeStudio();
+        } else if (event.target.matches('input[type="text"]')) return;
         else if (key === 'r') randomize();
         else if (key === 's') screenshot();
         else if (key === 'l') share();
         else if (key === 'm') setSound(!Sound.enabled);
         else if (key === 'c') setMode(mode === 'studio' ? (Store.hasCreation ? 'view' : 'hero') : 'studio');
-        else if (/^[1-4]$/.test(key) && event.target !== range) setLevel(Number(key));
+        else if (key === 't') {
+          if (mode === 'studio' && page === 'text') showPage('main');
+          else editText();
+        } else if (/^[1-4]$/.test(key) && event.target !== range) setLevel(Number(key));
         else return;
         event.preventDefault();
       });
@@ -3321,6 +3853,9 @@
         Sound.update(config);
         Sound.blip(1 + levelOf(config) * 0.08);
         sync(config);
+        // A different scene has different lettering
+        if (mode === 'studio' && page === 'text') buildTextFields();
+        else syncText();
         if (changed.some((key) => key !== 'chaos')) {
           const [x, y] = FX.toScreen(...Scene.castToWorld(60, -140));
           FX.burst(x, y, 26, 1.5);
@@ -3330,13 +3865,14 @@
       });
 
       sync(Store.config);
+      syncText();
     }
 
     return { init, setMode, toast, quip, say, armSound };
   })();
 
   /* ------------------------------------------------------------------------
-     11 — Easter eggs
+     12 — Easter eggs
      ------------------------------------------------------------------------ */
 
   const Eggs = (() => {
@@ -3369,7 +3905,7 @@
       if (pokes.length >= 6 && !cast.classList.contains('is-hatless')) {
         pokes = [];
         cast.classList.add('is-hatless');
-        UI.say(cast.querySelector('.hat') ? 'Hey. My hat.' : 'Rude.');
+        UI.say(cast.querySelector('.hat') ? 'Hey. My hat.' : 'Rude.', { hold: 2600 });
         window.setTimeout(() => cast.classList.remove('is-hatless'), 5200);
       }
     }
@@ -3378,12 +3914,13 @@
       $('#layer-cast').addEventListener('click', (event) => {
         if (!event.target.closest('.character')) return;
         FX.burst(event.clientX, event.clientY, 10, 1);
-        poke();
         UI.quip();
+        poke();
       });
 
       // ↑ ↑ ↓ ↓ ← → ← → B A
       document.addEventListener('keydown', (event) => {
+        if (event.target.matches('input[type="text"]')) return;
         const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
         progress = key === KONAMI[progress] ? progress + 1 : key === KONAMI[0] ? 1 : 0;
         if (progress < KONAMI.length) return;
@@ -3413,15 +3950,15 @@
   })();
 
   /* ------------------------------------------------------------------------
-     12 — Boot
+     13 — Boot
      ------------------------------------------------------------------------ */
 
   function boot() {
     const state = Store.load();
     Eggs.roll();
+    Scene.render(Store.config);
     UI.init();
     Eggs.init();
-    Scene.render(Store.config);
     Director.configure(Store.config);
     Director.onBoom = (power) => Sound.boom(power);
     Sound.update(Store.config);
