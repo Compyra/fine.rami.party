@@ -528,6 +528,8 @@ html[data-level="4"] .glitch { animation: glitch 2.6s steps(1) infinite; }
 
 /* 04 — Speech bubble ====================================================== */
 
+/* A zero-size anchor that script.js pins to the character's head every frame;
+   the box and its tail hang off it. */
 .bubble {
   position: absolute;
   z-index: 5;
@@ -535,7 +537,6 @@ html[data-level="4"] .glitch { animation: glitch 2.6s steps(1) infinite; }
   left: 0;
   width: 0;
   height: 0;
-  transform: translate3d(var(--bx, 0px), var(--by, 0px), 0);
   pointer-events: none;
   transition: opacity .4s ease;
 }
@@ -1723,7 +1724,7 @@ html[data-level="4"] .pip.is-lit i { background: linear-gradient(180deg, #ffb53d
   }
   .grain { animation: none; }
   #layer-env { filter: none !important; }
-  .sweat { opacity: .9 !important; animation: none !important; }
+  html:not([data-level="1"]) .sweat { opacity: .9 !important; animation: none !important; }
   .steam path { stroke-dasharray: none; opacity: .7; }
 }
 

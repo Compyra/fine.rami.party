@@ -230,7 +230,6 @@
     }
 
     return {
-      state,
       load,
       set,
       keep,
@@ -746,7 +745,7 @@
     /* — Low orbit, high temperature: portholes, consoles and a very red alert — */
     space: {
       chair: 'stool', table: 'console', reflect: 0.4, palette: 'ember',
-      eggs: { wall: [640, 380], floor: [1236, 1012] },
+      eggs: { wall: [452, 372], floor: [1236, 1012] },
       art: () => {
         let ribs = '';
         let rivets = '';
@@ -1073,7 +1072,7 @@
       <path d="M58 -7H67L103 -108L94 -110Z" fill="#aeb8c2" ${ol()}/>
       <g ${FONT_SANS} font-weight="700" font-size="11">
         ${pill(18, -150, 58, '#e2330f', '#fff', 'URGENT', '--t:5s;--rx:-10px')}
-        ${pill(-22, -140, 68, '#fbfdff', '#26323d', 'RE: RE: RE:', '--t:5s;--d:-1.7s;--rx:14px')}
+        ${pill(-26, -140, 76, '#fbfdff', '#26323d', 'RE: RE: RE:', '--t:5s;--d:-1.7s;--rx:14px')}
         ${pill(30, -132, 46, '#f2c230', '#26323d', 'ASAP', '--t:5s;--d:-3.4s;--rx:2px')}
       </g>`,
     book: (title) => `
@@ -1081,7 +1080,7 @@
       <rect x="-38" y="-54" width="80" height="108" rx="5" fill="#2f6d5e" ${ol()}/>
       <path d="M-29 -52v104" stroke="#1f4d42" stroke-width="5"/>
       <rect x="-21" y="-42" width="56" height="48" rx="3" fill="none" stroke="#f6e7c1" stroke-width="2"/>
-      <text ${FONT_SERIF} font-weight="700" font-size="10.5" text-anchor="middle" fill="#f6e7c1">${title.map((line, i) => `<tspan x="7" y="${-25 + i * 13}">${line}</tspan>`).join('')}</text>
+      <text ${FONT_SERIF} font-weight="700" font-size="${title.some((line) => line.length > 7) ? 9 : 10.5}" text-anchor="middle" fill="#f6e7c1">${title.map((line, i) => `<tspan x="7" y="${-25 + i * 13}">${line}</tspan>`).join('')}</text>
       <path d="${flamePath(22, 30)}" transform="translate(7 44)" fill="#ff8a2a"/>`,
     phone: () => `
       <path class="screen-glow" d="M-16 -30L-92 -58L-98 46L-16 30Z" fill="url(#c-screen)"/>
@@ -1407,7 +1406,9 @@
 
       let cup = drink.art();
       if (config.drink === 'coffee' && Eggs.mug) {
-        cup += `<text x="-2" y="-24" text-anchor="middle" ${FONT_SANS} font-weight="700" font-size="${Eggs.mug.length > 2 ? 12 : 17}" fill="#c0392b">${Eggs.mug}</text>`;
+        // Slogan mug. When it is held, nudge the lettering clear of the paw.
+        const x = pose.drink === 'held' ? 9 : -1;
+        cup += `<text x="${x}" y="-24" text-anchor="middle" ${FONT_SANS} font-weight="700" font-size="${Eggs.mug.length > 2 ? 10.5 : 16}" fill="#c0392b">${Eggs.mug}</text>`;
       }
       const cupArt = pop(['drink'], cup);
 
@@ -2043,7 +2044,7 @@
 
     buildSprites('ember');
 
-    return { resize, configure, frame, burst, toScreen, light, canvases: { back, front }, get visible() { return visible; } };
+    return { resize, configure, frame, burst, toScreen, light, canvases: { back, front } };
   })();
 
   /* ------------------------------------------------------------------------
@@ -2221,10 +2222,12 @@
       const calm = prefersReducedMotion();
       const motion = calm ? 0.12 : 1;
 
-      // Camera: ease towards the framing for the current mode; drift with the pointer for parallax
-      cam.x = damp(cam.x, target.x, 3.2, dt);
-      cam.y = damp(cam.y, target.y, 3.2, dt);
-      cam.zoom = damp(cam.zoom, target.zoom, 3.2, dt);
+      // Camera: ease towards the framing for the current mode (cut straight to it under reduced motion);
+      // drift with the pointer for parallax
+      const ease = calm ? 80 : 3.2;
+      cam.x = damp(cam.x, target.x, ease, dt);
+      cam.y = damp(cam.y, target.y, ease, dt);
+      cam.zoom = damp(cam.zoom, target.zoom, ease, dt);
       const driftX = calm ? 0 : -pointer.x * 16 + Math.sin(clock * 0.21) * 5;
       const driftY = calm ? 0 : -pointer.y * 9 + Math.sin(clock * 0.17 + 2) * 3;
       cam.px = damp(cam.px, driftX, 4, dt);
@@ -2282,12 +2285,13 @@
         hudTemp.textContent = `${Math.round(base * (1 + (noise(clock * 0.8) - 0.5) * 0.06)).toLocaleString('en-US')}°C`;
       }
 
-      // Quality governor: sustained slow frames shed the most expensive effects, one tier at a time
+      // Quality governor: sustained slow frames (under ~25 fps, so a 30 Hz display is left alone)
+      // shed the most expensive effects, one tier at a time
       if (!forcedQuality && quality !== 'low') {
         if (grace > 0) {
           grace -= dt;
         } else {
-          slow = Math.max(0, slow + (dt > 0.03 ? dt : -dt * 0.6));
+          slow = Math.max(0, slow + (dt > 0.04 ? dt : -dt * 0.6));
           if (slow > 1.4) {
             slow = 0;
             grace = 3;
@@ -2335,7 +2339,6 @@
       configure,
       setMode,
       boom,
-      aim,
       measureBubble,
       set onBoom(handler) { onBoom = handler; },
       get camera() { return frameCam; },
@@ -2994,13 +2997,15 @@
       function place() {
         const box = trigger.getBoundingClientRect();
         const { innerWidth: vw, innerHeight: vh } = window;
-        const width = Math.min(Math.max(box.width, 272), vw - 24);
+        const width = Math.min(Math.max(box.width, 304), vw - 24);
+        // Size first, measure second: the width decides how the hints wrap, and so how tall the list is
+        list.style.width = `${width}px`;
+        list.style.maxHeight = 'none';
         const below = vh - box.bottom - 20;
         const above = box.top - 20;
-        const wanted = Math.min(list.scrollHeight, 420);
+        const wanted = list.scrollHeight;
         const up = below < wanted && above > below;
         const height = Math.min(wanted, up ? above : below);
-        list.style.width = `${width}px`;
         list.style.maxHeight = `${height}px`;
         list.style.left = `${clamp(box.left, 12, vw - width - 12)}px`;
         list.style.top = `${up ? box.top - 8 - height : box.bottom + 8}px`;
@@ -3077,7 +3082,15 @@
         hide();
       });
       window.addEventListener('resize', hide);
-      $('#studio-scroll').addEventListener('scroll', hide, { passive: true });
+      // Focusing the trigger can scroll the panel: follow it, and only give up once it has left the view
+      const scroller = $('#studio-scroll');
+      scroller.addEventListener('scroll', () => {
+        if (!open) return;
+        const box = trigger.getBoundingClientRect();
+        const view = scroller.getBoundingClientRect();
+        if (box.bottom < view.top || box.top > view.bottom) hide();
+        else place();
+      }, { passive: true });
 
       selects[key] = {
         hide,
@@ -3319,7 +3332,7 @@
       sync(Store.config);
     }
 
-    return { init, setMode, toast, quip, say, armSound, get mode() { return mode; } };
+    return { init, setMode, toast, quip, say, armSound };
   })();
 
   /* ------------------------------------------------------------------------
